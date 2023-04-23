@@ -1,0 +1,45 @@
+[package]
+name = "hydrabadger"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "peer_node"
+path = "src/bin/peer_node.rs"
+
+[dependencies]
+log = "0.4"
+env_logger = "0.5"
+clap = "2"
+failure = "0.1"
+crossbeam = "0.8.2"
+crossbeam-channel = "0.5.8"
+chrono = "0.4"
+rust-crypto = "*"
+num-traits = "*"
+num-bigint = "*"
+colored = "*"
+itertools = "*"
+pairing = "*"
+rand = "0.6"
+serde = "1"
+serde_bytes = "~0.10.4"
+serde_derive = "1"
+signifix = "0.9"
+futures = "0.1"
+tokio = "~0.1.13"
+tokio-codec = "~0.1.1"
+tokio-io = "~0.1.9"
+bincode = "1"
+tokio-serde = "0.2"
+tokio-serde-bincode = "0.1"
+bytes = "~0.4.10"
+uuid = { version = "0.6", features = ["v4", "serde"] }
+byteorder = "1"
+parking_lot = "0.6"
+clear_on_drop = "0.2"
+hbbft = { git = "https://github.com/VegeBun-csj/hbbft.git", branch = "0.1.0" }
+
+[profile.release]
+debug = true
+debug-assertions = true
