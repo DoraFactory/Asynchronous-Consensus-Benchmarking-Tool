@@ -38,7 +38,7 @@ uuid = { version = "0.6", features = ["v4", "serde"] }
 byteorder = "1"
 parking_lot = "0.6"
 clear_on_drop = "0.2"
-hbbft = { git = "https://github.com/VegeBun-csj/hbbft.git", branch = "0.1.0" }
+hbbft = { git = "https://github.com/DoraFactory/HBBFT.git", branch = "main" }
 
 [profile.release]
 debug = true
