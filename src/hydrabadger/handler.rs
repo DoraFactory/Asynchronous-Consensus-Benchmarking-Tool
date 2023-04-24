@@ -19,7 +19,9 @@ use hbbft::{
     Target,
 };
 use std::{cell::RefCell, collections::HashMap};
-use tokio::{self, prelude::*};
+// use tokio::{self, prelude::*};
+use tokio_stream::{self as stream, StreamExt};
+use tokio::time::interval;
 
 /// Hydrabadger event (internal message) handler.
 pub struct Handler<C: Contribution, N: NodeId> {
@@ -618,40 +620,42 @@ impl<C: Contribution, N: NodeId> Handler<C, N> {
 // NOTE: 这里是重写future的poll方法，这个poll方法的实现就是为了推动这个future的执行的，
 // 这个方法是自动触发的，所以会一直调用这个方法，直到达到某个条件，最终返回ready才算执行完
 // 也就是说，整个节点的状态，消息处理怎么推进，共识结果怎么处理，都是在这个方法里面去定义的
-impl<C: Contribution, N: NodeId> Future for Handler<C, N> {
+impl<C: Contribution, N: NodeId> Handler<C, N> {
     type Item = ();
     type Error = Error;
 
     /// Polls the internal message receiver until all txs are dropped.
-    fn poll(&mut self) -> Poll<(), Error> {
+    async fn run(&mut self) -> Result<(), Error> {
         // Ensure the loop can't hog the thread for too long:
         const MESSAGES_PER_TICK: usize = 50;
+        // let mut interval = interval(Duration::from_millis(MESSAGES_PER_TICK as u64));
 
         let mut state = self.hdb.state_mut();
 
         // 1. NOTE: 处理要过来的internal messages，这里有一个循环限制次数，防止当前线程过多占用导致阻塞
         for i in 0..MESSAGES_PER_TICK {
             // 首先从peer_internal_rx中轮询内部消息
-            match self.peer_internal_rx.poll() {
+            let internal_msg = self
+                .peer_internal_rx
+                .next()
+                .await.map_err(|_| Error::HydrabadgerHandlerPoll)?;
+            match internal_msg {
                 // 如果成功接收到一个内部消息，就会调用handle_internal_message来处理，这里需要注意就是
                 // 如果这个时候线程占用结束，下一次开启的时候线程内部会有notify方法重新唤醒
-                Ok(Async::Ready(Some(i_msg))) => {
+                Some(i_msg) => {
                     self.handle_internal_message(i_msg, &mut state)?;
 
                     // Exceeded max messages per tick, schedule notification:
                     if i + 1 == MESSAGES_PER_TICK {
-                        task::current().notify();
+                        tokio::task::yield_now().await;
                     }
                 }
                 // 断开连接
-                Ok(Async::Ready(None)) => {
+                None => {
                     // The sending ends have all dropped.
                     info!("Shutting down Handler...");
-                    return Ok(Async::Ready(()));
+                    return Ok(());
                 }
-                // 没有收到内部消息
-                Ok(Async::NotReady) => {}
-                Err(()) => return Err(Error::HydrabadgerHandlerPoll),
             };
         }
 
@@ -721,7 +725,7 @@ impl<C: Contribution, N: NodeId> Future for Handler<C, N> {
                 if !self.batch_tx.is_closed() {
                     if let Err(_err) = self.batch_tx.unbounded_send(batch) {
                         error!("Unable to send batch output. Shutting down...");
-                        return Ok(Async::Ready(()));
+                        return Ok(());
                     } else {
                         // Notify epoch listeners that a batch has been output.
                         let mut dropped_listeners = Vec::new();
@@ -736,7 +740,7 @@ impl<C: Contribution, N: NodeId> Future for Handler<C, N> {
                     }
                 } else {
                     info!("Batch output receiver dropped. Shutting down...");
-                    return Ok(Async::Ready(()));
+                    return Ok(());
                 }
             }
 
@@ -774,6 +778,6 @@ impl<C: Contribution, N: NodeId> Future for Handler<C, N> {
         drop(state);
         trace!("hydrabadger::Handler::poll: 'state' unlocked for writing.");
 
-        Ok(Async::NotReady)
+        Ok(())
     }
 }

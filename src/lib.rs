@@ -34,8 +34,10 @@ extern crate byteorder;
 extern crate bytes;
 extern crate rand;
 extern crate tokio;
-extern crate tokio_codec;
-extern crate tokio_io;
+/* extern crate tokio_codec;
+extern crate tokio_io; */
+extern crate tokio_util;
+extern crate tokio_stream;
 extern crate uuid;
 #[macro_use]
 extern crate serde_derive;
@@ -79,12 +81,18 @@ use std::{
     net::SocketAddr,
     ops::Deref,
 };
-use tokio::{
+/* use tokio::{
     codec::{Framed, LengthDelimitedCodec},
     io,
     net::TcpStream,
     prelude::*,
+}; */
+use tokio::{
+    io,
+    net::TcpStream
 };
+use tokio_util::codec::{Framed, length_delimited::LengthDelimitedCodec};
+use tokio_stream::{Stream, StreamExt};
 use uuid::Uuid;
 
 pub use crate::hydrabadger::{Config, Hydrabadger};

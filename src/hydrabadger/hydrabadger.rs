@@ -23,12 +23,15 @@ use std::{
     },
     time::{Duration, Instant},
 };
-use tokio::{
+/* use tokio::{
     self,
     net::{TcpListener, TcpStream},
     prelude::*,
     timer::{Delay, Interval},
-};
+}; */
+use tokio::net::{TcpListener, TcpStream};
+use tokio_stream::{self as stream, StreamExt};
+use tokio::time::{sleep, interval};
 
 // The number of random transactions to generate per interval.
 const DEFAULT_TXN_GEN_COUNT: usize = 5;
@@ -419,20 +422,51 @@ impl<C: Contribution, N: NodeId + DeserializeOwned + 'static> Hydrabadger<C, N> 
     }
 
     // 产生contribution交易
-    fn generate_contributions(
+    async fn generate_contributions(
         self,
         // 注意这里传入的时候是一个闭包
         gen_txns: Option<fn(usize, usize) -> C>,
-    ) -> impl Future<Item = (), Error = ()> {
+    ) {
         if let Some(gen_txns) = gen_txns {
             let epoch_stream = self.register_epoch_listener();
             let gen_delay = self.inner.config.txn_gen_interval;
             // 每隔一个时间间隔生成一个contribution
-            let gen_cntrb = epoch_stream
-                .and_then(move |epoch_no| {
-                    Delay::new(Instant::now() + Duration::from_millis(gen_delay))
-                        .map_err(|err| panic!("Timer error: {:?}", err))
-                        .and_then(move |_| Ok(epoch_no))
+            let gen_cntrb = async move {
+                loop {
+                    let epoch_no = epoch_stream.next().await;
+                    match epoch_no {
+                        Some(_) => {
+                            tokio::time::sleep(Duration::from_millis(gen_delay)).await;
+    
+                            let hdb = self.clone();
+    
+                            if let StateDsct::Validator = hdb.state_dsct_stale() {
+                                info!(
+                                    "Generating and sending {} random transactions...",
+                                    self.inner.config.txn_gen_count
+                                );
+    
+                                let txns = gen_txns(
+                                    self.inner.config.txn_gen_count,
+                                    self.inner.config.txn_gen_bytes,
+                                );
+    
+                                println!("我们本地的节点产生的随机交易数据为{:?}", txns);
+    
+                                hdb.send_internal(InternalMessage::hb_contribution(
+                                    hdb.inner.nid.clone(),
+                                    OutAddr(*hdb.inner.addr),
+                                    txns,
+                                ));
+                            }
+                        }
+                        None => break,
+                    }
+                }
+            };
+/*             let gen_cntrb = epoch_stream
+                .then(move |epoch_no| {
+                    sleep(Duration::from_millis(gen_delay)).map(move |_| epoch_no)
                 })
                 .for_each(move |_epoch_no| {
                     let hdb = self.clone();
@@ -461,12 +495,10 @@ impl<C: Contribution, N: NodeId + DeserializeOwned + 'static> Hydrabadger<C, N> 
                     }
                     Ok(())
                 })
-                .map_err(|err| panic!("Contribution generation error: {:?}", err));
-
-            Either::A(gen_cntrb)
-        } else {
-            Either::B(future::ok(()))
-        }
+                .map_err(|err| panic!("Contribution generation error: {:?}", err)); */
+            // 运行 generate_contributions
+            gen_cntrb.await.map_err(|err| panic!("Contribution generation error: {:?}", err));;
+        };
     }
 
     /// Returns a future that generates random transactions and logs status
