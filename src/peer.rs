@@ -7,7 +7,7 @@ use crate::{
     Contribution, InAddr, InternalMessage, NodeId, OutAddr, Uid, WireMessage, WireMessageKind,
     WireMessages, WireRx, WireTx,
 };
-use futures::sync::mpsc;
+use futures::channel::mpsc;
 use hbbft::{crypto::PublicKey, dynamic_honey_badger::Input as HbInput};
 use serde::{Deserialize, Serialize};
 use std::{
@@ -84,14 +84,12 @@ impl<C: Contribution, N: NodeId> PeerHandler<C, N> {
 }
 
 /// A future representing the client connection.
-impl<C: Contribution, N: NodeId> Future for PeerHandler<C, N> {
-    type Item = ();
-    type Error = Error;
+impl<C: Contribution, N: NodeId> PeerHandler<C, N> {
 
-    fn poll(&mut self) -> Poll<(), Error> {
+    async fn run(&mut self) -> Result<(), Error> {
         const MESSAGES_PER_TICK: usize = 10;
 
-        // Receive all messages from peers.
+        /* // Receive all messages from peers.
         for i in 0..MESSAGES_PER_TICK {
             // Polling an `UnboundedReceiver` cannot fail, so `unwrap` here is
             // safe.
@@ -108,13 +106,29 @@ impl<C: Contribution, N: NodeId> Future for PeerHandler<C, N> {
                 }
                 _ => break,
             }
+        } */
+        // Receive all messages from peers.
+        for i in 0..MESSAGES_PER_TICK {
+            match self.rx.next().await {
+                Some(v) => {
+                    // Buffer the message. Once all messages are buffered, they will
+                    // be flushed to the socket (right below).
+                    self.wire_msgs.start_send(v).unwrap();
+
+                    // Exceeded max messages per tick, schedule notification:
+                    if i + 1 == MESSAGES_PER_TICK {
+                        tokio::task::yield_now().await;
+                    }
+                }
+                None => break,
+            }
         }
 
         // Flush the write buffer to the socket
         let _ = self.wire_msgs.poll_complete()?;
 
         // Read new messages from the socket
-        while let Async::Ready(message) = self.wire_msgs.poll()? {
+        while let Some(message) = self.wire_msgs.next().await? {
             trace!("Received message: {:?}", message);
 
             if let Some(msg) = message {
@@ -183,11 +197,11 @@ impl<C: Contribution, N: NodeId> Future for PeerHandler<C, N> {
                 }
             } else {
                 info!("Peer ({}: '{:?}') disconnected.", self.out_addr, self.nid);
-                return Ok(Async::Ready(()));
+                return Ok(());
             }
         }
 
-        Ok(Async::NotReady)
+        Ok(())
     }
 }
 

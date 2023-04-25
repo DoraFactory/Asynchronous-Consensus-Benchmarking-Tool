@@ -60,7 +60,7 @@ pub mod hydrabadger;
 pub mod peer;
 
 use bytes::{Bytes, BytesMut};
-use futures::{sync::mpsc, AsyncSink, StartSend};
+use futures::{channel::mpsc, ready, sink::SinkExt,};
 use hbbft::{
     crypto::{PublicKey, PublicKeySet, SecretKey, Signature},
     dynamic_honey_badger::{
@@ -93,6 +93,8 @@ use tokio::{
 };
 use tokio_util::codec::{Framed, length_delimited::LengthDelimitedCodec};
 use tokio_stream::{Stream, StreamExt};
+use std::pin::Pin;
+use std::task::{Context, Poll};
 use uuid::Uuid;
 
 pub use crate::hydrabadger::{Config, Hydrabadger};
@@ -386,43 +388,54 @@ impl<C: Contribution, N: NodeId + DeserializeOwned> WireMessages<C, N> {
 }
 
 impl<C: Contribution, N: NodeId + DeserializeOwned> Stream for WireMessages<C, N> {
-    type Item = WireMessage<C, N>;
-    type Error = Error;
+    type Item = Result<WireMessage<C, N>, Error>;
+    
+    fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+        let this = self.get_mut();
+            let frame = match ready!(Pin::new(&mut this.framed).poll_next(cx)) {
+                Some(frame) => frame,
+                None => return Poll::Ready(None),
+            };
 
-    fn poll(&mut self) -> Poll<Option<Self::Item>, Self::Error> {
-        match try_ready!(self.framed.poll()) {
-            Some(frame) => {
-                let s_msg: SignedWireMessage =
-                    bincode::deserialize(&frame.freeze()).map_err(Error::Serde)?;
-                let msg: WireMessage<C, N> =
-                    bincode::deserialize(&s_msg.message).map_err(Error::Serde)?;
+            let s_msg: SignedWireMessage =
+                match bincode::deserialize(&frame.freeze()).map_err(Error::Serde) {
+                    Ok(s_msg) => s_msg,
+                    Err(e) => return Poll::Ready(Some(Err(e))),
+                };
 
-                // Verify signature for certain variants.
-                match msg.kind {
-                    WireMessageKind::Message(..) | WireMessageKind::KeyGen(..) => {
-                        let peer_pk = self
-                            .peer_pk
-                            .ok_or(Error::VerificationMessageReceivedUnknownPeer)?;
-                        if !peer_pk.verify(&s_msg.sig, &s_msg.message) {
-                            return Err(Error::InvalidSignature);
-                        }
+            let msg: WireMessage<C, N> =
+                match bincode::deserialize(&s_msg.message).map_err(Error::Serde) {
+                    Ok(msg) => msg,
+                    Err(e) => return Poll::Ready(Some(Err(e))),
+                };
+
+            // Verify signature for certain variants.
+            match msg.kind {
+                WireMessageKind::Message(..) | WireMessageKind::KeyGen(..) => {
+                    let peer_pk = match this.peer_pk {
+                        Some(ref pk) => pk,
+                        None => return Poll::Ready(Some(Err(Error::VerificationMessageReceivedUnknownPeer))),
+                    };
+
+                    if !peer_pk.verify(&s_msg.sig, &s_msg.message) {
+                        return Poll::Ready(Some(Err(Error::InvalidSignature)));
                     }
-                    _ => {}
                 }
-
-                Ok(Async::Ready(Some(msg)))
+                _ => {}
             }
-            None => Ok(Async::Ready(None)),
-        }
+
+            return Poll::Ready(Some(Ok(msg)));
     }
 }
 
-impl<C: Contribution, N: NodeId + Serialize> Sink for WireMessages<C, N> {
-    type SinkItem = WireMessage<C, N>;
-    type SinkError = Error;
+impl<C: Contribution, N: NodeId + Serialize> futures::sink::Sink<WireMessage<C, N>> for WireMessages<C, N> {
+    type Error = Error;
 
-    fn start_send(&mut self, item: Self::SinkItem) -> StartSend<Self::SinkItem, Self::SinkError> {
-        // TODO: Reuse buffer:
+    fn poll_ready(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
+        Pin::new(&mut self.framed).poll_ready(cx).map_err(Error::from)
+    }
+
+    fn start_send(mut self: Pin<&mut Self>, item: WireMessage<C, N>) -> Result<(), Self::Error> {
         let mut serialized = BytesMut::new();
 
         let message = bincode::serialize(&item).map_err(Error::Serde)?;
@@ -432,21 +445,15 @@ impl<C: Contribution, N: NodeId + Serialize> Sink for WireMessages<C, N> {
             Ok(s) => serialized.extend_from_slice(&s),
             Err(err) => return Err(Error::Io(io::Error::new(io::ErrorKind::Other, err))),
         }
-        match self.framed.start_send(serialized.freeze()) {
-            Ok(async_sink) => match async_sink {
-                AsyncSink::Ready => Ok(AsyncSink::Ready),
-                AsyncSink::NotReady(_) => Ok(AsyncSink::NotReady(item)),
-            },
-            Err(err) => Err(Error::Io(err)),
-        }
+        Pin::new(&mut self.framed).start_send(serialized.freeze()).map_err(Error::from)
     }
 
-    fn poll_complete(&mut self) -> Poll<(), Self::SinkError> {
-        self.framed.poll_complete().map_err(Error::from)
+    fn poll_flush(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
+        Pin::new(&mut self.framed).poll_flush(cx).map_err(Error::from)
     }
 
-    fn close(&mut self) -> Poll<(), Self::SinkError> {
-        self.framed.close().map_err(Error::from)
+    fn poll_close(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
+        Pin::new(&mut self.framed).poll_close(cx).map_err(Error::from)
     }
 }
 

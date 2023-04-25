@@ -621,8 +621,6 @@ impl<C: Contribution, N: NodeId> Handler<C, N> {
 // 这个方法是自动触发的，所以会一直调用这个方法，直到达到某个条件，最终返回ready才算执行完
 // 也就是说，整个节点的状态，消息处理怎么推进，共识结果怎么处理，都是在这个方法里面去定义的
 impl<C: Contribution, N: NodeId> Handler<C, N> {
-    type Item = ();
-    type Error = Error;
 
     /// Polls the internal message receiver until all txs are dropped.
     async fn run(&mut self) -> Result<(), Error> {
@@ -638,7 +636,7 @@ impl<C: Contribution, N: NodeId> Handler<C, N> {
             let internal_msg = self
                 .peer_internal_rx
                 .next()
-                .await.map_err(|_| Error::HydrabadgerHandlerPoll)?;
+                .await;
             match internal_msg {
                 // 如果成功接收到一个内部消息，就会调用handle_internal_message来处理，这里需要注意就是
                 // 如果这个时候线程占用结束，下一次开启的时候线程内部会有notify方法重新唤醒

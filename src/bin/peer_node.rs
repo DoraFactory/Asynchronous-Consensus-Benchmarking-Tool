@@ -92,7 +92,8 @@ impl Transaction {
     }
 }
 
-fn main() {
+#[tokio::main]
+async fn main() {
     env_logger::Builder::new()
         .format(|buf, record| {
             writeln!(
@@ -163,5 +164,5 @@ fn main() {
     };
 
     // 启动节点
-    hb.run_node(Some(remote_addresses), Some(gen_txn));
+    hb.run_node(Some(remote_addresses), Some(gen_txn)).await;
 }

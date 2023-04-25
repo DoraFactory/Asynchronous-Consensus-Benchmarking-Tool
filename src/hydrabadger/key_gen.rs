@@ -5,7 +5,7 @@ use crate::hydrabadger::hydrabadger::Hydrabadger;
 use crate::peer::Peers;
 use crate::{Contribution, NetworkState, NodeId, Uid, WireMessage};
 use crossbeam::queue::SegQueue;
-use futures::sync::mpsc;
+use futures::channel::mpsc;
 use hbbft::{
     crypto::{PublicKey, SecretKey},
     sync_key_gen::{Ack, AckOutcome, Part, PartOutcome, SyncKeyGen},
