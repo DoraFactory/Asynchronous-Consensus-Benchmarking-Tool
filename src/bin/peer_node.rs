@@ -10,13 +10,12 @@ extern crate serde_derive;
 
 use chrono::Local;
 use clap::{App, Arg, ArgMatches};
-use hydrabadger::{Config, Hydrabadger, Uid};
+use hydrabadger::{Config, Hydrabadger, Uid, Transaction};
 use rand::{distributions::Standard, Rng};
 use std::collections::HashSet;
 use std::env;
 use std::io::Write;
 use std::net::{SocketAddr, ToSocketAddrs};
-
 /// Returns parsed command line arguments.
 fn arg_matches<'a>() -> ArgMatches<'a> {
     App::new("hydrabadger")
@@ -75,21 +74,6 @@ fn arg_matches<'a>() -> ArgMatches<'a> {
                 milliseconds. This can make reading or parsing logs more managable.")
             .takes_value(true))
         .get_matches()
-}
-
-/// A transaction.
-#[derive(Serialize, Deserialize, Eq, PartialEq, Hash, Ord, PartialOrd, Debug, Clone)]
-pub struct Transaction(pub Vec<u8>);
-
-impl Transaction {
-    fn random(len: usize) -> Transaction {
-        Transaction(
-            rand::thread_rng()
-                .sample_iter(&Standard)
-                .take(len)
-                .collect(),
-        )
-    }
 }
 
 fn main() {

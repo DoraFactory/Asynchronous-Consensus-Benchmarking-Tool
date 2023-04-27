@@ -5,13 +5,14 @@ use super::{Error, Handler, StateDsct, StateMachine};
 use crate::peer::{PeerHandler, Peers};
 use crate::{
     key_gen, BatchRx, Change, Contribution, EpochRx, EpochTx, InAddr, InternalMessage, InternalTx,
-    NodeId, OutAddr, WireMessage, WireMessageKind, WireMessages,
+    NodeId, OutAddr, WireMessage, WireMessageKind, WireMessages, Transaction,
 };
 use futures::{
     future::{self, Either},
     sync::mpsc,
 };
 use hbbft::crypto::{PublicKey, SecretKey};
+use hbbft::dynamic_honey_badger::Batch;
 use parking_lot::{Mutex, RwLock, RwLockReadGuard, RwLockWriteGuard};
 use serde::de::DeserializeOwned;
 use std::{
@@ -449,7 +450,9 @@ impl<C: Contribution, N: NodeId + DeserializeOwned + 'static> Hydrabadger<C, N> 
                             self.inner.config.txn_gen_bytes,
                         );
 
+                        println!("++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++");
                         println!("我们本地的节点产生的随机交易数据为{:?}", txns);
+                        println!("++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++");
 
                         // 发送节点内部消息
                         hdb.send_internal(InternalMessage::hb_contribution(
@@ -565,7 +568,13 @@ impl<C: Contribution, N: NodeId + DeserializeOwned + 'static> Hydrabadger<C, N> 
         let produce_block = future::lazy(move || {
             let batch_receiver = hdb_clone.batch_rx().unwrap();
             batch_receiver.for_each(move |block| {
-                println!("本地得到的HBBFT共识结果为{:?}", block);
+                // println!("本地得到的HBBFT共识结果为{:?}", block);
+                // let mut total_num = 0;
+                println!("****************************************************************");
+                for (_, val) in  block.contributions() {
+                    println!("{:?}", val);
+                }
+                println!("****************************************************************");
                 Ok(())
             })
         });
@@ -598,5 +607,9 @@ impl<C: Contribution, N: NodeId + DeserializeOwned + 'static> Hydrabadger<C, N> 
 
     pub fn secret_key(&self) -> &SecretKey {
         &self.inner.secret_key
+    }
+
+    pub fn sub_block_tx_count(&self) -> usize {
+        self.inner.config.txn_gen_count
     }
 }

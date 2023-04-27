@@ -129,6 +129,21 @@ impl<C> Contribution for C where
 {
 }
 
+/// A transaction.
+#[derive(Serialize, Deserialize, Eq, PartialEq, Hash, Ord, PartialOrd, Debug, Clone)]
+pub struct Transaction(pub Vec<u8>);
+
+impl Transaction {
+    pub fn random(len: usize) -> Transaction {
+        Transaction(
+            rand::thread_rng()
+                .sample_iter(&Standard)
+                .take(len)
+                .collect(),
+        )
+    }
+}
+
 pub trait NodeId: NodeIdT + Serialize + DeserializeOwned + 'static {}
 
 impl<N> NodeId for N where N: NodeIdT + Serialize + DeserializeOwned + 'static {}
