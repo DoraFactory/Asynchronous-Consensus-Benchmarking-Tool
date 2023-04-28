@@ -10,7 +10,12 @@
 # RUN cargo build --release
 # CMD ["./target/release/peer_node"]
 
-FROM alpine:latest
+# FROM alpine:latest
+FROM ubuntu:latest
+
+RUN apt-get update && \
+    apt-get install -y iproute2 && \
+    rm -rf /var/lib/apt/lists/*
 
 ENV HYDRABADGER_LOG=info
 
