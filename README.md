@@ -59,3 +59,9 @@ If you want to start with more node, you can open more terminal and see the log,
 ```
 ./hbd.sh 4
 ```
+
+## Docker setup
+start with 3 node:
+```shell
+docker-compose up
+```

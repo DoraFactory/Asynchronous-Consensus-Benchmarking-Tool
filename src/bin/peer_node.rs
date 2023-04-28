@@ -12,7 +12,7 @@ use chrono::Local;
 use clap::{App, Arg, ArgMatches};
 use hydrabadger::{Config, Hydrabadger, Uid, Transaction};
 use rand::{distributions::Standard, Rng};
-use std::collections::HashSet;
+use std::{collections::HashSet, thread, time::Duration};
 use std::env;
 use std::io::Write;
 use std::net::{SocketAddr, ToSocketAddrs};
@@ -102,10 +102,28 @@ fn main() {
         .next()
         .unwrap();
 
+    let max_retries = 5;
+    let retry_interval = Duration::from_secs(2);
     let remote_addresses: HashSet<SocketAddr> = match matches.values_of("remote-address") {
-        Some(addrs) => addrs
-            .flat_map(|addr| addr.to_socket_addrs().expect("Invalid remote address"))
-            .collect(),
+        Some(addrs) => {
+            // FIX docker socket addr DNS retry
+            let mut resolved_addrs = HashSet::new();
+            for addr in addrs {
+                for _ in 0..max_retries {
+                    match addr.to_socket_addrs() {
+                        Ok(addrs) => {
+                            resolved_addrs.extend(addrs);
+                            break;
+                        }
+                        Err(e) => {
+                            eprintln!("Error resolving address '{}': {}. Retrying...", addr, e);
+                            thread::sleep(retry_interval);
+                        }
+                    }
+                }
+            }
+            resolved_addrs
+        }
         None => HashSet::new(),
     };
 
