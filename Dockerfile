@@ -19,6 +19,6 @@ RUN apt-get update && \
 
 ENV HYDRABADGER_LOG=info
 
-COPY ./peer_node /usr/local/bin/
+COPY ./target/release/peer_node /usr/local/bin/
 
 CMD peer_node

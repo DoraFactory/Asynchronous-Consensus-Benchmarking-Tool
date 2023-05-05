@@ -451,7 +451,11 @@ impl<C: Contribution, N: NodeId + DeserializeOwned + 'static> Hydrabadger<C, N> 
                         );
 
                         println!("++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++");
+                        println!("++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++");
+                        println!("++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++");
                         println!("我们本地的节点产生的随机交易数据为{:?}", txns);
+                        println!("++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++");
+                        println!("++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++");
                         println!("++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++");
 
                         // 发送节点内部消息
@@ -567,13 +571,21 @@ impl<C: Contribution, N: NodeId + DeserializeOwned + 'static> Hydrabadger<C, N> 
         let hdb_clone = self.clone();
         let produce_block = future::lazy(move || {
             let batch_receiver = hdb_clone.batch_rx().unwrap();
+            let mut last_block_time = Instant::now();
             batch_receiver.for_each(move |block| {
-                // println!("本地得到的HBBFT共识结果为{:?}", block);
-                // let mut total_num = 0;
+                // Calculate the time interval since the last block
+                let interval = Instant::now().duration_since(last_block_time);
+                println!("Time interval since last block: {:?}", interval);
+                last_block_time = Instant::now(); // Update the last_block_time
+        
+                println!("****************************************************************");
+                println!("*****");
                 println!("****************************************************************");
                 for (_, val) in  block.contributions() {
                     println!("{:?}", val);
                 }
+                println!("****************************************************************");
+                println!("*****");
                 println!("****************************************************************");
                 Ok(())
             })
