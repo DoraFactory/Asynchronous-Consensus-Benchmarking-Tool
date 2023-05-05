@@ -573,14 +573,14 @@ impl<C: Contribution, N: NodeId + DeserializeOwned + 'static> Hydrabadger<C, N> 
             let batch_receiver = hdb_clone.batch_rx().unwrap();
             let mut last_block_time = Instant::now();
             batch_receiver.for_each(move |block| {
+                let current_epoch = block.epoch();
+                println!("********************current epoch:{:?}***********************************", current_epoch);
                 // Calculate the time interval since the last block
                 let interval = Instant::now().duration_since(last_block_time);
-                println!("Time interval since last block: {:?}", interval);
+                println!("********************epoch interval time:{:?}*****************************", interval);
                 last_block_time = Instant::now(); // Update the last_block_time
-        
-                println!("****************************************************************");
                 println!("*****");
-                println!("****************************************************************");
+                println!("********************output block transaction*****************************************");
                 for (_, val) in  block.contributions() {
                     println!("{:?}", val);
                 }
