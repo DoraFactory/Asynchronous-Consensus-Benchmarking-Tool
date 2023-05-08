@@ -531,26 +531,33 @@ impl<C: Contribution, N: NodeId> Peers<C, N> {
         out_addr: O,
         pub_info: (N, InAddr, PublicKey),
     ) -> bool {
-        let peer = self.peers.get_mut(out_addr.borrow()).expect(&format!(
-            "Peers::establish_validator: \
-             No peer found with outgoing address: {}",
-            out_addr.borrow()
-        ));
-        match self
-            .out_addrs
-            .insert(pub_info.0.clone(), *out_addr.borrow())
-        {
-            Some(_out_addr_pub) => {
-                let pi_pub = peer
-                    .pub_info()
-                    .expect("Peers::establish_validator: internal consistency error");
+        let borrowed_out_addr = out_addr.borrow();
+        let peer = match self.peers.get_mut(borrowed_out_addr) {
+            Some(peer) => peer,
+            None => {
+                eprintln!(
+                    "Peers::establish_validator: \
+                     No peer found with outgoing address: {}",
+                    borrowed_out_addr
+                );
+                return false;
+            }
+        };
+    
+        let (node_id, in_addr, public_key) = pub_info.clone();
+        if let Some(_) = self.out_addrs.insert(node_id.clone(), *borrowed_out_addr) {
+            if let Some(pi_pub) = peer.pub_info() {
                 assert!(
-                    pub_info.0 == *pi_pub.0 && pub_info.1 == *pi_pub.1 && pub_info.2 == *pi_pub.2
+                    node_id == *pi_pub.0 && in_addr == *pi_pub.1 && public_key == *pi_pub.2,
+                    "Peers::establish_validator: internal consistency error"
                 );
                 assert!(peer.is_validator());
                 return true;
+            } else {
+                eprintln!("Peers::establish_validator: internal consistency error");
             }
-            None => peer.establish_validator(Some(pub_info)),
+        } else {
+            peer.establish_validator(Some(pub_info));
         }
         false
     }

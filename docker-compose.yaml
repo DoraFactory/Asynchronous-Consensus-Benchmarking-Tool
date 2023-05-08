@@ -35,7 +35,7 @@ services:
   node3:
     image: hbbft-node:latest
     # set bandwidth 1Mbps and delay 100ms
-    command: bash -c "tc qdisc add dev eth0 root netem rate 1mbit && peer_node -b node3:8003 -r node2:8002 -r node1:8001"
+    command: bash -c "tc qdisc add dev eth0 root netem rate 1mbit && peer_node -b node3:8003 -r node2:8002 -r node4:8001"
     # command: bash -c "tc qdisc add dev eth0 root netem rate 1mbit delay 50ms && peer_node -b node3:8003 -r node2:8002 -r node1:8001"
     # command: peer_node -b node3:8003 -r node1:8001 -r node1:8001
     ports:
@@ -50,7 +50,6 @@ services:
           cpus: "2"
           memory: 512M
     depends_on:
-      - node1
       - node2
 networks:
   mynetwork:

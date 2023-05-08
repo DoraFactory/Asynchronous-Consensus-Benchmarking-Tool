@@ -577,15 +577,13 @@ impl<C: Contribution, N: NodeId + DeserializeOwned + 'static> Hydrabadger<C, N> 
                 println!("********************current epoch:{:?}***********************************", current_epoch);
                 // Calculate the time interval since the last block
                 let interval = Instant::now().duration_since(last_block_time);
-                println!("********************epoch interval time:{:?}*****************************", interval);
+                println!("**********************************epoch interval time:{:?}*****************************", interval);
                 last_block_time = Instant::now(); // Update the last_block_time
                 println!("*****");
-                println!("********************output block transaction*****************************************");
-                for (_, val) in  block.contributions() {
-                    println!("{:?}", val);
-                }
-                println!("****************************************************************");
-                println!("*****");
+                let contributor_list: Vec<_> = block.contributions().map(|(validator, _)| validator).collect();
+                let block_txs: Vec<_> = block.contributions().map(|(_, value)| value).collect();
+                println!("***********************************contributor list is {:?}*************************************", contributor_list);
+                println!("************************************output {:?} transactions*****************************************", block_txs.len() * self.inner.config.txn_gen_count);
                 println!("****************************************************************");
                 Ok(())
             })

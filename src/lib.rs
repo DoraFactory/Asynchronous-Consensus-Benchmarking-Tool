@@ -86,7 +86,7 @@ use tokio::{
     prelude::*,
 };
 use uuid::Uuid;
-
+use std::convert::AsRef;
 pub use crate::hydrabadger::{Config, Hydrabadger};
 // TODO: Create a separate, library-wide error type.
 pub use crate::hydrabadger::key_gen;
