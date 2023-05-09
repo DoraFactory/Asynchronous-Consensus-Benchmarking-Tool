@@ -2,54 +2,94 @@ version: '3'
 services:
   node1:
     image: hbbft-node:latest
-    command: bash -c "tc qdisc add dev eth0 root netem rate 1mbit && peer_node -b node1:8001 -r node2:8002 -r node3:8003"
-    # command: peer_node -b node1:8001 -r node2:8002 -r node3:8003
+    command: bash -c "tc qdisc add dev eth0 root netem rate 1mbit && peer_node -b node1:8001 -r node2:8002 -r node3:8003 --txn-gen-count=100"
     ports:
       - "8001:8001"
     networks:
       - mynetwork
     container_name: hbb-node1
     privileged: true
-    deploy:
-      resources:
-        limits:
-          cpus: "2"
-          memory: 512M
+    cpuset: '0,1'
+    mem_limit: 512M
+
   node2:
     image: hbbft-node:latest
-    command: bash -c "tc qdisc add dev eth0 root netem rate 1mbit && peer_node -b node2:8002 -r node1:8001 -r node3:8003"
-    # command: peer_node -b node2:8002 -r node1:8001 -r node3:8003
+    command: bash -c "tc qdisc add dev eth0 root netem rate 1mbit && peer_node -b node2:8002 -r node1:8001 -r node3:8003 --txn-gen-count=100"
     ports:
       - "8002:8002"
     networks:
       - mynetwork
     container_name: hbb-node2
     privileged: true
-    deploy:
-      resources:
-        limits:
-          cpus: "2"
-          memory: 512M
+    cpuset: '2,3'
+    mem_limit: 512M
     depends_on:
       - node1
   node3:
     image: hbbft-node:latest
-    # set bandwidth 1Mbps and delay 100ms
-    command: bash -c "tc qdisc add dev eth0 root netem rate 1mbit && peer_node -b node3:8003 -r node2:8002 -r node4:8001"
-    # command: bash -c "tc qdisc add dev eth0 root netem rate 1mbit delay 50ms && peer_node -b node3:8003 -r node2:8002 -r node1:8001"
-    # command: peer_node -b node3:8003 -r node1:8001 -r node1:8001
+    command: bash -c "tc qdisc add dev eth0 root netem rate 1mbit && peer_node -b node3:8003 -r node2:8002 -r node4:8004 --txn-gen-count=100"
     ports:
       - "8003:8003"
     networks:
       - mynetwork
     container_name: hbb-node3
     privileged: true
-    deploy:
-      resources:
-        limits:
-          cpus: "2"
-          memory: 512M
+    cpuset: '4,5'
+    mem_limit: 512M
     depends_on:
       - node2
+  node4:
+    image: hbbft-node:latest
+    command: bash -c "tc qdisc add dev eth0 root netem rate 1mbit && peer_node -b node4:8004 -r node3:8003  -r node5:8005 --txn-gen-count=100"
+    ports:
+      - "8004:8004"
+    networks:
+      - mynetwork
+    container_name: hbb-node4
+    privileged: true
+    cpuset: '6,7'
+    mem_limit: 512M
+    depends_on:
+      - node3
+
+  node5:
+    image: hbbft-node:latest
+    command: bash -c "tc qdisc add dev eth0 root netem rate 1mbit && peer_node -b node5:8005 -r node6:8006 -r node4:8004 --txn-gen-count=100"
+    ports:
+      - "8005:8005"
+    networks:
+      - mynetwork
+    container_name: hbb-node5
+    privileged: true
+    cpuset: '8,9'
+    mem_limit: 512M
+    depends_on:
+      - node4
+  node6:
+    image: hbbft-node:latest
+    command: bash -c "tc qdisc add dev eth0 root netem rate 1mbit && peer_node -b node6:8006 -r node5:8005 -r node7:8007 --txn-gen-count=100"
+    ports:
+      - "8006:8006"
+    networks:
+      - mynetwork
+    container_name: hbb-node6
+    privileged: true
+    cpuset: '10,11'
+    mem_limit: 512M
+    depends_on:
+      - node5
+  node7:
+    image: hbbft-node:latest
+    command: bash -c "tc qdisc add dev eth0 root netem rate 1mbit && peer_node -b node7:8007 -r node6:8006 -r node8:8008 --txn-gen-count=100"
+    ports:
+      - "8007:8007"
+    networks:
+      - mynetwork
+    container_name: hbb-node7
+    privileged: true
+    cpuset: '12,13'
+    mem_limit: 512M
+    depends_on:
+      - node6
 networks:
   mynetwork:

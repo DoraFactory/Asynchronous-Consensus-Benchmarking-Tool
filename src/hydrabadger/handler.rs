@@ -18,9 +18,10 @@ use hbbft::{
     sync_key_gen::{Ack, Part},
     Target,
 };
-use std::{cell::RefCell, collections::HashMap};
+use rand::Rng;
+use std::{cell::RefCell, collections::HashMap, time::Duration};
 use tokio::{self, prelude::*};
-
+use rand::thread_rng;
 /// Hydrabadger event (internal message) handler.
 pub struct Handler<C: Contribution, N: NodeId> {
     hdb: Hydrabadger<C, N>,
@@ -690,12 +691,46 @@ impl<C: Contribution, N: NodeId> Future for Handler<C, N> {
                     peers.wire_to_all(WireMessage::join_plan(jp));
                 }
 
+                println!("debuging@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@");
+                println!("当前这个batch的change为{:?}！！！！！！", batch.change());
+                println!("debuging@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@");
+
                 // 看batch中记录了当前网络有哪些变动，比如节点变更
                 match batch.change() {
                     ChangeState::None => {}
                     ChangeState::InProgress(_change) => {}
                     ChangeState::Complete(change) => match change {
                         DhbChange::NodeChange(pub_keys) => {
+
+                            /* let observers: Vec<_> = state
+                                .dhb()
+                                .unwrap()
+                                .netinfo()
+                                .public_key_map()
+                                .keys()
+                                .filter(|id| !state.dhb().unwrap().netinfo().is_node_validator(id))
+                                .cloned()
+                                .collect();
+
+                            let mut promoted = false;
+
+                            for observer_id in observers {
+                                if let Some(pk) = pub_keys.get(&observer_id) {
+                                    if state.discriminant() == StateDsct::Observer {
+                                        state.promote_to_validator()?;
+                                        promoted = true;
+                                    }
+                                }
+                            }
+
+                            if !promoted {
+                                if let Some(pk) = pub_keys.get(self.hdb.node_id()) {
+                                    assert_eq!(*pk, self.hdb.secret_key().public_key());
+                                    assert!(state.dhb().unwrap().netinfo().is_validator());
+                                }
+                            } */
+                        
+
                             if let Some(pk) = pub_keys.get(self.hdb.node_id()) {
                                 assert_eq!(*pk, self.hdb.secret_key().public_key());
                                 assert!(state.dhb().unwrap().netinfo().is_validator());
