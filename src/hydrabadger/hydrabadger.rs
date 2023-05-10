@@ -601,7 +601,7 @@ impl<C: Contribution, N: NodeId + DeserializeOwned + 'static > Hydrabadger<C, N>
                     .write(true)
                     .create(true)
                     .append(true)
-                    .open(file_name)
+                    .open(file_name.clone())
                 {
                     Ok(file) => file,
                     Err(e) => panic!("Couldn't open file {}: {}", file_name, e),
@@ -618,7 +618,7 @@ impl<C: Contribution, N: NodeId + DeserializeOwned + 'static > Hydrabadger<C, N>
                 }
                 
                 // prepare data
-                let data = vec![current_epoch, contributor_list.len(), block_txs.len() * self.inner.config.txn_gen_count, interval];
+                let data = vec![current_epoch, contributor_list.len().try_into().unwrap(), (block_txs.len() * self.inner.config.txn_gen_count).try_into().unwrap(), interval.as_secs()];
 
                 // write data
                 let data_format = format!("| {} | {} | {} | {} |\n", data[0], data[1], data[2], data[3]);
