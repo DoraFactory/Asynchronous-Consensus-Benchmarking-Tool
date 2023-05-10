@@ -25,7 +25,7 @@ use std::{
     time::{Duration, Instant},
 };
 // 测试数据的写入
-use std::fs::{File, OpenOptions};
+use std::fs::{File, OpenOptions, metadata};
 use std::io::{Write, BufWriter};
 use tokio::{
     self,
@@ -596,20 +596,23 @@ impl<C: Contribution, N: NodeId + DeserializeOwned + 'static > Hydrabadger<C, N>
 
                 // 将测试结果以nodeid命名的md文件
                 let file_name = hdb_clone.get_nid() + ".md";
+                let metadata = metadata(&file_name);
+                let should_write_headers = match metadata {
+                    Ok(meta) => meta.len() == 0,
+                    Err(_) => true,
+                };
+
                 // 打开文件，如果不存在，则创建一个新文件
-                let file = match OpenOptions::new()
+                let file = OpenOptions::new()
                     .write(true)
                     .create(true)
                     .append(true)
-                    .open(file_name.clone())
-                {
-                    Ok(file) => file,
-                    Err(e) => panic!("Couldn't open file {}: {}", file_name, e),
-                };
+                    .open(&file_name)
+                    .unwrap();
 
                 let mut writer = BufWriter::new(file);
 
-                if current_epoch == 0 {
+                if should_write_headers {
                     let headers = ["epoch_id", "validator num", "transaction num", "epoch_time(latency)"];
                     let header_line = format!("\n | {} | {} | {} | {} |\n", headers[0], headers[1], headers[2], headers[3]);
                     let separator_line = "|:-------:|:-------:|:-------:|:-------:|\n";
