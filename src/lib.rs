@@ -74,7 +74,7 @@ use rand::{
 use serde::{de::DeserializeOwned, Serialize};
 use std::{
     collections::BTreeMap,
-    fmt::{self, Debug},
+    fmt::{self, Debug, Display},
     marker::PhantomData,
     net::SocketAddr,
     ops::Deref,
@@ -144,9 +144,9 @@ impl Transaction {
     }
 }
 
-pub trait NodeId: NodeIdT + Serialize + DeserializeOwned + 'static {}
+pub trait NodeId: NodeIdT + Serialize + DeserializeOwned + Display + 'static {}
 
-impl<N> NodeId for N where N: NodeIdT + Serialize + DeserializeOwned + 'static {}
+impl<N> NodeId for N where N: NodeIdT + Serialize + DeserializeOwned + Display + 'static {}
 
 /// A unique identifier.
 #[derive(Clone, Copy, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]

@@ -24,6 +24,9 @@ use std::{
     },
     time::{Duration, Instant},
 };
+// 测试数据的写入
+use std::fs::{File, OpenOptions};
+use std::io::{Write, BufWriter};
 use tokio::{
     self,
     net::{TcpListener, TcpStream},
@@ -116,7 +119,7 @@ pub struct Hydrabadger<C: Contribution, N: NodeId> {
     batch_rx: Arc<Mutex<Option<BatchRx<C, N>>>>,
 }
 
-impl<C: Contribution, N: NodeId + DeserializeOwned + 'static> Hydrabadger<C, N> {
+impl<C: Contribution, N: NodeId + DeserializeOwned + 'static > Hydrabadger<C, N> {
     /// Returns a new Hydrabadger node.
     pub fn new(addr: SocketAddr, cfg: Config, nid: N) -> Self {
         // 生成peer节点本地私钥
@@ -194,6 +197,11 @@ impl<C: Contribution, N: NodeId + DeserializeOwned + 'static> Hydrabadger<C, N> 
     /// Returns a mutable reference to the inner state.
     pub(crate) fn state_mut(&self) -> RwLockWriteGuard<StateMachine<C, N>> {
         self.inner.state.write()
+    }
+
+    /// Return peer node id
+    pub fn get_nid(&self) -> String {
+        self.inner.nid.to_string()
     }
 
     /// Returns a recent state discriminant.
@@ -585,6 +593,36 @@ impl<C: Contribution, N: NodeId + DeserializeOwned + 'static> Hydrabadger<C, N> 
                 println!("***********************************contributor list is {:?}*************************************", contributor_list);
                 println!("************************************output {:?} transactions*****************************************", block_txs.len() * self.inner.config.txn_gen_count);
                 println!("****************************************************************");
+
+                // 将测试结果以nodeid命名的md文件
+                let file_name = hdb_clone.get_nid() + ".md";
+                // 打开文件，如果不存在，则创建一个新文件
+                let file = match OpenOptions::new()
+                    .write(true)
+                    .create(true)
+                    .append(true)
+                    .open(file_name)
+                {
+                    Ok(file) => file,
+                    Err(e) => panic!("Couldn't open file {}: {}", file_name, e),
+                };
+
+                let mut writer = BufWriter::new(file);
+
+                if current_epoch == 0 {
+                    let headers = ["epoch_id", "validator num", "transaction num", "epoch_time(latency)"];
+                    let header_line = format!("\n | {} | {} | {} | {} |\n", headers[0], headers[1], headers[2], headers[3]);
+                    let separator_line = "|:-------:|:-------:|:-------:|:-------:|\n";
+                    writer.write_all(header_line.as_bytes()).unwrap();
+                    writer.write_all(separator_line.as_bytes()).unwrap();
+                }
+                
+                // prepare data
+                let data = vec![current_epoch, contributor_list.len(), block_txs.len() * self.inner.config.txn_gen_count, interval];
+
+                // write data
+                let data_format = format!("| {} | {} | {} | {} |\n", data[0], data[1], data[2], data[3]);
+                writer.write_all(data_format.as_bytes()).unwrap();
                 Ok(())
             })
         });
