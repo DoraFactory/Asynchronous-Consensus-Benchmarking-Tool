@@ -594,6 +594,9 @@ impl<C: Contribution, N: NodeId + DeserializeOwned + 'static > Hydrabadger<C, N>
                 println!("************************************output {:?} transactions*****************************************", block_txs.len() * self.inner.config.txn_gen_count);
                 println!("****************************************************************");
 
+                // validator数量
+                let validator_numbers = hdb_clone.peers().count_validators() + 1;
+
                 // 将测试结果以nodeid命名的md文件
                 let file_name = hdb_clone.get_nid() + ".md";
                 let metadata = metadata(&file_name);
@@ -613,18 +616,26 @@ impl<C: Contribution, N: NodeId + DeserializeOwned + 'static > Hydrabadger<C, N>
                 let mut writer = BufWriter::new(file);
 
                 if should_write_headers {
-                    let headers = ["epoch_id", "validator num", "transaction num", "epoch_time(latency)"];
-                    let header_line = format!("\n | {} | {} | {} | {} |\n", headers[0], headers[1], headers[2], headers[3]);
-                    let separator_line = "|:-------:|:-------:|:-------:|:-------:|\n";
+                    let headers = ["epoch_id", "validator num", "contributor num", "batch num", "tx size(Bytes)/tx", "block num", "epoch_time(latency)"];
+                    let header_line = format!("\n | {} | {} | {} | {} | {} | {} | {} |\n", headers[0], headers[1], headers[2], headers[3], headers[4], headers[5], headers[6]);
+                    let separator_line = "|:-------:|:-------:|:-------:|:-------:|:-------:|:-------:|:-------:|\n";
                     writer.write_all(header_line.as_bytes()).unwrap();
                     writer.write_all(separator_line.as_bytes()).unwrap();
                 }
                 
+                let epoch_time = interval.as_secs_f64();
                 // prepare data
-                let data = vec![current_epoch, contributor_list.len().try_into().unwrap(), (block_txs.len() * self.inner.config.txn_gen_count).try_into().unwrap(), interval.as_secs()];
+                let data = vec![
+                    current_epoch.to_string(), 
+                    validator_numbers.to_string(), 
+                    contributor_list.len().to_string(), 
+                    self.inner.config.txn_gen_count.to_string(), 
+                    self.inner.config.txn_gen_bytes.to_string(), (block_txs.len() * self.inner.config.txn_gen_count).to_string(), 
+                    interval.as_secs_f64().to_string()
+                ];
 
                 // write data
-                let data_format = format!("| {} | {} | {} | {} |\n", data[0], data[1], data[2], data[3]);
+                let data_format = format!("| {} | {} | {} | {} | {} | {} | {} |\n", data[0], data[1], data[2], data[3], data[4], data[5], data[6]);
                 writer.write_all(data_format.as_bytes()).unwrap();
                 Ok(())
             })
