@@ -1,8 +1,8 @@
-version: '3'
+version: '2.1'
 services:
   node1:
     image: hbbft-node:latest
-    command: bash -c "tc qdisc add dev eth0 root netem rate 1mbit && peer_node -b node1:8001 -r node2:8002 -r node3:8003 --txn-gen-count=100"
+    command: bash -c "tc qdisc add dev eth0 root netem rate ${BAND_WIDTH}mbit && peer_node -b node1:8001 -r node2:8002 -r node3:8003 --txn-gen-count=${TXN_GEN_COUNT} --txn-bytes=${TXN_BYTES}"
     ports:
       - "8001:8001"
     networks:
@@ -14,7 +14,7 @@ services:
 
   node2:
     image: hbbft-node:latest
-    command: bash -c "tc qdisc add dev eth0 root netem rate 1mbit && peer_node -b node2:8002 -r node1:8001 -r node3:8003 --txn-gen-count=100"
+    command: bash -c "tc qdisc add dev eth0 root netem rate ${BAND_WIDTH}mbit && peer_node -b node2:8002 -r node1:8001 -r node3:8003 --txn-gen-count=${TXN_GEN_COUNT} --txn-bytes=${TXN_BYTES}"
     ports:
       - "8002:8002"
     networks:
@@ -27,7 +27,7 @@ services:
       - node1
   node3:
     image: hbbft-node:latest
-    command: bash -c "tc qdisc add dev eth0 root netem rate 1mbit && peer_node -b node3:8003 -r node2:8002 -r node4:8004 --txn-gen-count=100"
+    command: bash -c "tc qdisc add dev eth0 root netem rate ${BAND_WIDTH}mbit && peer_node -b node3:8003 -r node2:8002 -r node4:8004 --txn-gen-count=${TXN_GEN_COUNT} --txn-bytes=${TXN_BYTES}"
     ports:
       - "8003:8003"
     networks:
@@ -40,7 +40,7 @@ services:
       - node2
   node4:
     image: hbbft-node:latest
-    command: bash -c "tc qdisc add dev eth0 root netem rate 1mbit && peer_node -b node4:8004 -r node3:8003  -r node5:8005 --txn-gen-count=100"
+    command: bash -c "tc qdisc add dev eth0 root netem rate ${BAND_WIDTH}mbit && peer_node -b node4:8004 -r node3:8003  -r node5:8005 --txn-gen-count=${TXN_GEN_COUNT} --txn-bytes=${TXN_BYTES}"
     ports:
       - "8004:8004"
     networks:
@@ -54,7 +54,7 @@ services:
 
   node5:
     image: hbbft-node:latest
-    command: bash -c "tc qdisc add dev eth0 root netem rate 1mbit && peer_node -b node5:8005 -r node6:8006 -r node4:8004 --txn-gen-count=100"
+    command: bash -c "tc qdisc add dev eth0 root netem rate ${BAND_WIDTH}mbit && peer_node -b node5:8005 -r node6:8006 -r node4:8004 --txn-gen-count=${TXN_GEN_COUNT} --txn-bytes=${TXN_BYTES}"
     ports:
       - "8005:8005"
     networks:
@@ -67,7 +67,7 @@ services:
       - node4
   node6:
     image: hbbft-node:latest
-    command: bash -c "tc qdisc add dev eth0 root netem rate 1mbit && peer_node -b node6:8006 -r node5:8005 -r node7:8007 --txn-gen-count=100"
+    command: bash -c "tc qdisc add dev eth0 root netem rate ${BAND_WIDTH}mbit && peer_node -b node6:8006 -r node5:8005 -r node7:8007 --txn-gen-count=${TXN_GEN_COUNT} --txn-bytes=${TXN_BYTES}"
     ports:
       - "8006:8006"
     networks:
@@ -80,7 +80,7 @@ services:
       - node5
   node7:
     image: hbbft-node:latest
-    command: bash -c "tc qdisc add dev eth0 root netem rate 1mbit && peer_node -b node7:8007 -r node6:8006 -r node8:8008 --txn-gen-count=100"
+    command: bash -c "tc qdisc add dev eth0 root netem rate ${BAND_WIDTH}mbit && peer_node -b node7:8007 -r node6:8006 -r node8:8008 --txn-gen-count=${TXN_GEN_COUNT} --txn-bytes=${TXN_BYTES}"
     ports:
       - "8007:8007"
     networks:
