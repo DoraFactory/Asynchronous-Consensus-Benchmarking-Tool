@@ -118,7 +118,7 @@ The performance of a consensus algorithm is influenced by multiple factors, such
 **1. Build your docker image**  
 software and hardware environment of host machine:  
 * os: ubuntu22.04
-* cpu: >=8核心  
+* cpu: >=8 cores  
 * memory: >=8GB
 
 > Note that the base image built in our Dockerfile is Ubuntu. If your operating system is different from here, you can replace the base image as needed.
