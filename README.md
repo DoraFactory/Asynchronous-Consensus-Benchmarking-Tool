@@ -205,7 +205,7 @@ The above parameters will all affect the consensus results, so we need to use th
 ```
 > After all Docker containers are started, we can wait for a period of time to allow all nodes to go through multiple consensus processes. This way, we can obtain more test data. We will follow this method for the subsequent tests.
 
- | epoch_id | validator num | contributor num | batch num | tx size(Bytes)/tx | block num | epoch_time(latency) |
+ | epoch_id | validator num | contributor num | tx num of contribution | tx size(Bytes)/tx | tx num of block  | epoch_time(latency) |
 |:-------:|:-------:|:-------:|:-------:|:-------:|:-------:|:-------:|
 | 0 | 3 | 3 | 100 | 200 | 300 | 6.382321751 |
 | 1 | 4 | 3 | 100 | 200 | 300 | 5.4075059549999995 |
@@ -234,7 +234,7 @@ The above parameters will all affect the consensus results, so we need to use th
 ```
 ./start.sh 7 30 500 200 4
 ```
- | epoch_id | validator num | contributor num | batch num | tx size(Bytes)/tx | block num | epoch_time(latency) |
+ | epoch_id | validator num | contributor num | tx num of contribution | tx size(Bytes)/tx | tx num of block  | epoch_time(latency) |
 |:-------:|:-------:|:-------:|:-------:|:-------:|:-------:|:-------:|
 | 0 | 3 | 3 | 500 | 200 | 1500 | 6.828630519 |
 | 1 | 4 | 3 | 500 | 200 | 1500 | 6.043940672 |
@@ -262,7 +262,7 @@ The above parameters will all affect the consensus results, so we need to use th
 ```
 ./start.sh 7 30 1000 200 4
 ```
- | epoch_id | validator num | contributor num | batch num | tx size(Bytes)/tx | block num | epoch_time(latency) |
+ | epoch_id | validator num | contributor num | tx num of contribution | tx size(Bytes)/tx | tx num of block  | epoch_time(latency) |
 |:-------:|:-------:|:-------:|:-------:|:-------:|:-------:|:-------:|
 | 0 | 3 | 3 | 1000 | 200 | 3000 | 6.966154583 |
 | 1 | 4 | 3 | 1000 | 200 | 3000 | 6.91688182 |
