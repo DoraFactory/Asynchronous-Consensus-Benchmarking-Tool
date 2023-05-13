@@ -12,7 +12,7 @@ Now, we have implemented a testing framework based on the HBBFT consensus algori
 
 ![flow](./img/flow.jpg)
 
-### Node modules
+### Modules
 As shown in the figure above, each node contains the following modules:
 * **Connect Manager**: Manages the network connections between nodes.
 * **Transaction Generator**: Generates random normal transactions.
@@ -93,7 +93,7 @@ If you want to start with more node, you can open more terminal and see the log,
 ./hbd.sh 4
 ```
 
-## Benchmark testing
+## Benchmark testing of HBBFT
 
 To more accurately and realistically test the performance of the HBBFT consensus algorithm under various conditions, we use Docker containers to simulate communication between nodes and manage the configuration and startup of multiple nodes through docker-compose.
 
@@ -318,3 +318,6 @@ We also provide a script for setting the Docker container delay, which is used t
 
 **More test case**  
 If you want to try more test cases, you can customize them based on the above test scripts to obtain the desired test result data.
+
+## Benchmark testing of HBBFT variant algorithms
+TODO...
