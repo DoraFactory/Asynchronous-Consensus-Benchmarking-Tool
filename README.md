@@ -288,11 +288,12 @@ The above parameters will all affect the consensus results, so we need to use th
 
 
 **Test Case2**:  
-我们还提供了一个用于设置docker容器延迟的脚本，用于模拟HBBFT共识在不同延迟环境下的测试表现。
-比如我们模拟网络中7个节点(每个节点产生500笔交易，每笔交易20Bytes,节点带宽为8Mbits)在不同网络延迟的情况下的表现：
-- 确保所有节点在相同配置下启动
-- 等待所有节点都成为validator并稳定出块
-- 设置所有节点的网络延迟
+We also provide a script for setting the Docker container delay, which is used to simulate the testing performance of HBBFT consensus under different delay environments. For example, we simulate the performance of **7** nodes in the network (each node generates **500** transactions, each transaction is **20** Bytes, and the node bandwidth is **8** Mbits) under different network delays:
+
+* Make sure all nodes are started under the same configuration.
+* Wait for all nodes to become validators and stabilize block production.
+* Set the network delay for all nodes.
+
 
 1. start all nodes
 ```
