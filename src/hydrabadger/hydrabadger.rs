@@ -616,7 +616,7 @@ impl<C: Contribution, N: NodeId + DeserializeOwned + 'static > Hydrabadger<C, N>
                 let mut writer = BufWriter::new(file);
 
                 if should_write_headers {
-                    let headers = ["epoch_id", "validator num", "contributor num", "batch num", "tx size(Bytes)/tx", "block num", "epoch_time(latency)"];
+                    let headers = ["epoch_id", "validator num", "contributor num", "tx num of contribution", "tx size(Bytes)/tx", "tx num of block", "epoch_time(latency)"];
                     let header_line = format!("\n | {} | {} | {} | {} | {} | {} | {} |\n", headers[0], headers[1], headers[2], headers[3], headers[4], headers[5], headers[6]);
                     let separator_line = "|:-------:|:-------:|:-------:|:-------:|:-------:|:-------:|:-------:|\n";
                     writer.write_all(header_line.as_bytes()).unwrap();
