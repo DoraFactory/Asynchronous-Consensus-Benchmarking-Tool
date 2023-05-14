@@ -1,4 +1,4 @@
-# HBBFT-Node
+# Asynchronous-Consensus-Benchmarking-Tool
 
 This is a benchmark testing framework for asynchronous consensus protocols. The current version is based on the HoneyBadger BFT consensus algorithm.
 
