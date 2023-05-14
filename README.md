@@ -1,19 +1,21 @@
 # HBBFT-Node
 
-This is a benchmark testing framework based on the HBBFT(HoneyBadger BFT) consensus algorithm.
+This is a benchmark testing framework for asynchronous consensus protocols. The current version is based on the HoneyBadger BFT consensus algorithm.
 
-## BackGround
+## Background
 
-Async Byzantine Fault Tolerance consensus was first originated from Andrew Miller et al.'s HBBFT consensus algorithm. In recent years, many variant algorithms based on HBBFT have emerged. However, there is no open-source and universal testing framework to measure the performance indicators of these algorithms. Based on this, we developed an asynchronous consensus testing framework to measure the performance of HBBFT and its variant algorithms under different parameter indicators.
+Asynchronous Byzantine Fault Tolerance consensus was first originated from Andrew Miller et al.'s [HBBFT](https://eprint.iacr.org/2016/199.pdf) consensus algorithm. In recent years, many variants have emerged. However, there is no open-source and universal testing framework to measure and benchmark these algorithms. Based on this, we developed an asynchronous consensus testing framework to measure the performance, security of HBBFT and other asynchronous consensus algorithms under different parameter indicators.
 
-Now, we have implemented a testing framework based on the HBBFT consensus algorithm. The framework is tested based on the [HBBFT](https://github.com/poanetwork/hbbft) algorithm library developed by POA.
+At this moment, we have already implemented a simple testing framework based on HBBFT. The framework is tested based on the POA network's [HBBFT](https://github.com/poanetwork/hbbft).
 
 ## HBBFT network architecture
 
 ![flow](./img/flow.jpg)
 
 ### Modules
+
 As shown in the figure above, each node contains the following modules:
+
 * **Connect Manager**: Manages the network connections between nodes.
 * **Transaction Generator**: Generates random normal transactions.
 * **Message Manager**: Handles node status messages (from observer to validator) and normal transaction messages.
@@ -35,14 +37,14 @@ In a multi-node HBBFT network, communication mainly involves the following proce
 * **Step 4**: After all nodes reach consensus, the consensus result (`block/batch output`) will be generated locally, and the local `Block Handler` will parse the block data as test results when it receives it. 
 
 ## Minimal HBBFT network example
-> This section mainly provides a minimal practice for launching a multi-node HBBFT network. You can intuitively understand the communication between nodes through this example.
-open three terminal and run this command separately.
+> This section mainly provides a minimal demonstration for launching a multi-node HBBFT network. You can intuitively understand the communication between nodes through this example.
+open three terminal and run these commands separately.
 ```
 ./hbd.sh 1
 ./hbd.sh 2
 ./hbd.sh 3
 ```
-you can see the info in terminal like this:
+you can see the info in the terminal like this:
 ```
 2023-04-23T18:22:18 [INFO]: 
 2023-04-23T18:22:18 [INFO]: Local HBBFT Node: 
@@ -88,7 +90,7 @@ PublicKeySet { commit: Commitment { coeff: [G1 { x: Fq(FqRepr([12624710051720135
 2023-04-23T18:22:23 [INFO]: Generating and sending 5 random transactions...
 ```
 
-If you want to start with more node, you can open more terminal and see the log, such as:
+If you want to start with more nodes, you can open more terminal sessions and see the log, such as:
 ```
 ./hbd.sh 4
 ```
@@ -113,7 +115,7 @@ The performance of a consensus algorithm is influenced by multiple factors, such
 * Network performance under different hardware conditions (whether some nodes with lower hardware configurations will affect the overall consensus performance) 
 
 
-### start Basic hbbft network with docker
+### start a basic hbbft network with docker
 
 **1. Build your docker image**  
 software and hardware environment of host machine:  
@@ -121,7 +123,7 @@ software and hardware environment of host machine:
 * cpu: >=8 cores  
 * memory: >=8GB
 
-> Note that the base image built in our Dockerfile is Ubuntu. If your operating system is different from here, you can replace the base image as needed.
+> Note that the base image built in our Dockerfile is Ubuntu. If your operating system is different from here, you need to replace the base image as needed.
 
 Go to the `scripts` directory under the `HBBFT-NODE` directory, and then execute
 ```shell
@@ -131,7 +133,7 @@ After executed, run:
 ```shell
 docker images
 ```
-If you can see a built image, it means the build was successful.
+If you can see a built image, it means the build is successful.
 ```
 hbbft-node              latest             2dab66d3b66a   8 seconds ago   170MB
 ```
@@ -170,15 +172,16 @@ After successful execution, you will see a test_data file in the scripts directo
 
 The test data results include:
 - epoch_id
-- validator number and contributor number of each epoch
-- transaction number of contribution of each node
-- transaction size of per transaction
-- transaction number of block of each
-- epoch time(transaction latency)
+- number of validators and contributors of each epoch
+- number of transactions of each node
+- transaction size (per transaction)
+- number of transactions within each block
+- epoch time (transaction latency)
 
 
 ### Advanced configurable testing strategies
-> Above, we only started a minimal HBBFT cluster network using Docker and exported the test data of the nodes. However, in actual testing, we need to consider multiple metrics that affect consensus. To measure the impact of these metrics on the consensus results, we need to make these metrics configurable (such as bandwidth, latency, etc.) to obtain test data for consensus under different configurations for comparative analysis. From this point on, we will test with a minimum of 5 nodes.
+
+> Above, we only started a minimal HBBFT cluster network using Docker and exported the test data of the nodes. However, in actual testing, we need to consider multiple metrics that affect consensus. To measure the impact of these metrics from the consensus results, we need to make these metrics configurable (such as bandwidth, latency, etc.) to obtain test data for consensus under different configurations for comparative analysis. From this point on, we will test with a minimum of 5 nodes.
 
 In the `scripts` directory, we can use `start.sh` to configure the container nodes. By executing this shell file, you will see that the script provides several parameter options.
 ```shell
@@ -190,13 +193,13 @@ Usage: ./start.sh <nodes_number> [delay_between_nodes_in_seconds] [txn_gen_count
 ```
 **parameter settings**：  
 * `nodes_number`: the number of nodes to start (we only wrote 7 nodes in the docker-compose file, but there is no limit to this. If your machine performance is better, you can increase the number of nodes)
-* `delay_between_nodes_in_seconds`: the interval time between starting the next node after starting 4 nodes (we recommend an interval time of >=30s)
+* `delay_between_nodes_in_seconds`: the interval between starting the next node after starting 4 nodes (we recommend an interval time of >=30s)
 * `txn_gen_count`: the number of transactions generated by each node
 * `txn_bytes`: the size of each transaction in bytes
 * `band_width`: the bandwidth setting for each Docker container (this setting needs to be estimated based on the number of transactions, transaction size, and number of nodes)
 
 
-**Test Case1**:  
+**Test Case-1**:  
 The above parameters will all affect the consensus results, so we need to use the method of controlling variables to determine the impact of a certain metric on consensus. For example, if we want to test the relationship between block size and TPS (transactions per second), we can only change `txn_gen_count` and `txn_bytes`, and keep all other parameters consistent (other node configurations are not limited), and compare and analyze the TPS under different block sizes. Here is an example:
 
 * **7** nodes are started, with each node having **100** transaction of each contribution, each transaction size being **200** Bytes, and each node having a bandwidth of **4** Mbit.
@@ -287,7 +290,7 @@ The above parameters will all affect the consensus results, so we need to use th
 | 20 | 7 | 7 | 1000 | 200 | 7000 | 13.810295315 |
 
 
-**Test Case2**:  
+**Test Case-2**:  
 We also provide a script for setting the Docker container delay, which is used to simulate the testing performance of HBBFT consensus under different delay environments. For example, we simulate the performance of **7** nodes in the network (each node generates **500** transactions, each transaction is **20** Bytes, and the node bandwidth is **8** Mbits) under different network delays:
 
 * Make sure all nodes are started under the same configuration.
@@ -316,8 +319,13 @@ We also provide a script for setting the Docker container delay, which is used t
 ./set_latency.sh 7 300
 ```
 
-**More test case**  
+**More test cases**  
 If you want to try more test cases, you can customize them based on the above test scripts to obtain the desired test result data.
 
+## Bounties
+
+A bounty program will be launched to allow community developers to participate in benchmarking async consensus protocols and contribute to this repo. The program will be launched later this month.
+
 ## Benchmark testing of HBBFT variant algorithms
-TODO...
+
+TBD
