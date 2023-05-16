@@ -9,7 +9,7 @@ nodes_number=$1
 delay_between_nodes=${2:-30}
 txn_gen_count=${3:-100}
 txn_bytes=${4:-2}
-band_width=${5:-1}
+band_width=${5:-4}
 
 if [ $nodes_number -lt 5 ]; then
     echo "Error: The number of nodes must be at least 5."
