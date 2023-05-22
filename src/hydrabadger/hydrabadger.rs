@@ -457,12 +457,10 @@ impl<C: Contribution, N: NodeId + DeserializeOwned + 'static > Hydrabadger<C, N>
                             self.inner.config.txn_gen_count,
                             self.inner.config.txn_gen_bytes,
                         );
-
+                        
                         println!("++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++");
                         println!("++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++");
-                        println!("++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++");
-                        println!("我们本地的节点产生的随机交易数据为{:?}", txns);
-                        println!("++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++");
+                        println!("我们本地的节点产生的随机transaction数量为{:?}, 每个transaction的大小为{:?}Bytes", self.inner.config.txn_gen_count, self.inner.config.txn_gen_bytes);
                         println!("++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++");
                         println!("++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++");
 
