@@ -5,14 +5,13 @@ use crate::hydrabadger::hydrabadger::Hydrabadger;
 use crate::peer::Peers;
 use crate::{Contribution, NetworkState, NodeId, Uid, WireMessage};
 use crossbeam::queue::SegQueue;
-use futures::sync::mpsc;
 use hbbft::{
     crypto::{PublicKey, SecretKey},
     sync_key_gen::{Ack, AckOutcome, Part, PartOutcome, SyncKeyGen},
 };
 use rand::{self, FromEntropy};
 use std::collections::BTreeMap;
-
+use futures::channel::mpsc;
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq, Hash)]
 pub enum InstanceId {
     BuiltIn,
@@ -121,7 +120,7 @@ pub struct Machine<N> {
     instance_id: InstanceId,
 }
 
-impl<N: NodeId> Machine<N> {
+impl<N: NodeId + Unpin> Machine<N> {
     /// Creates and returns a new `Machine` in the `AwaitingPeers`
     /// state.
     pub fn awaiting_peers(
@@ -234,7 +233,7 @@ impl<N: NodeId> Machine<N> {
     /// Notify this key generation instance that peers have been added.
     //
     // TODO: Move some of this logic back to handler.
-    pub(super) fn add_peers<C: Contribution>(
+    pub(super) fn add_peers<C: Contribution + Unpin>(
         &mut self,
         peers: &Peers<C, N>,
         hdb: &Hydrabadger<C, N>,

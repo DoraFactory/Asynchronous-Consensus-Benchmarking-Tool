@@ -1,0 +1,65 @@
+version: '2.1'
+services:
+  node1:
+    image: hbbft-node:latest
+    command: bash -c "peer_node -b ${LOCAL}:8001 -r ${LOCAL}:8002 -r ${LOCAL}:8003 --txn-gen-count=${TXN_GEN_COUNT} --txn-bytes=${TXN_BYTES}"
+    container_name: hbb-node1
+    privileged: true
+    cpuset: '0,1'
+    mem_limit: 512M
+    network_mode: host
+
+
+  node2:
+    image: hbbft-node:latest
+    command: bash -c "peer_node -b ${LOCAL}:8002 -r ${LOCAL}:8001 -r ${LOCAL}:8003 --txn-gen-count=${TXN_GEN_COUNT} --txn-bytes=${TXN_BYTES}"
+    container_name: hbb-node2
+    privileged: true
+    cpuset: '2,3'
+    mem_limit: 512M
+    network_mode: host
+
+  node3:
+    image: hbbft-node:latest
+    command: bash -c "peer_node -b ${LOCAL}:8003 -r ${LOCAL}:8002 -r ${LOCAL}:8004 --txn-gen-count=${TXN_GEN_COUNT} --txn-bytes=${TXN_BYTES}"
+    container_name: hbb-node3
+    privileged: true
+    cpuset: '4,5'
+    mem_limit: 512M
+    network_mode: host
+
+  node4:
+    image: hbbft-node:latest
+    command: bash -c "peer_node -b ${LOCAL}:8004 -r ${LOCAL}:8003  -r ${LOCAL}:8005 --txn-gen-count=${TXN_GEN_COUNT} --txn-bytes=${TXN_BYTES}"
+    container_name: hbb-node4
+    privileged: true
+    cpuset: '6,7'
+    mem_limit: 512M
+    network_mode: host
+
+  node5:
+    image: hbbft-node:latest
+    command: bash -c "peer_node -b ${LOCAL}:8005 -r ${LOCAL}:8006 -r ${LOCAL}:8004 --txn-gen-count=${TXN_GEN_COUNT} --txn-bytes=${TXN_BYTES}"
+    container_name: hbb-node5
+    privileged: true
+    cpuset: '8,9'
+    mem_limit: 512M
+    network_mode: host
+
+  node6:
+    image: hbbft-node:latest
+    command: bash -c "peer_node -b ${LOCAL}:8006 -r ${LOCAL}:8005 -r ${LOCAL}:8007 --txn-gen-count=${TXN_GEN_COUNT} --txn-bytes=${TXN_BYTES}"
+    container_name: hbb-node6
+    privileged: true
+    cpuset: '10,11'
+    mem_limit: 512M
+    network_mode: host
+
+  node7:
+    image: hbbft-node:latest
+    command: bash -c "peer_node -b ${LOCAL}:8007 -r ${LOCAL}:8006 -r ${REMOTE}:8001 --txn-gen-count=${TXN_GEN_COUNT} --txn-bytes=${TXN_BYTES}"
+    container_name: hbb-node7
+    privileged: true
+    cpuset: '12,13'
+    mem_limit: 512M
+    network_mode: host

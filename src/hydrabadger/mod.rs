@@ -32,6 +32,8 @@ pub enum Error {
     Io(std::io::Error),
     #[fail(display = "Serde error: {}", _0)]
     Serde(bincode::Error),
+    #[fail(display = "Connecting error")]
+    ConnectError,
     #[fail(display = "Received a message with invalid signature")]
     InvalidSignature,
     #[fail(display = "Error polling hydrabadger internal receiver")]
@@ -57,6 +59,12 @@ pub enum Error {
 impl From<std::io::Error> for Error {
     fn from(err: std::io::Error) -> Error {
         Error::Io(err)
+    }
+}
+
+impl From<bincode::Error> for Error {
+    fn from(err: bincode::Error) -> Error {
+        Error::Serde(err)
     }
 }
 

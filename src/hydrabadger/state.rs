@@ -84,7 +84,7 @@ pub enum State<C: Contribution, N: NodeId> {
     },
 }
 
-impl<C: Contribution, N: NodeId> State<C, N> {
+impl<C: Contribution + Unpin, N: NodeId + Unpin> State<C, N> {
     /// Returns the state discriminant.
     pub(super) fn discriminant(&self) -> StateDsct {
         match self {
@@ -97,12 +97,12 @@ impl<C: Contribution, N: NodeId> State<C, N> {
     }
 }
 
-pub struct StateMachine<C: Contribution, N: NodeId> {
+pub struct StateMachine<C: Contribution + Unpin, N: NodeId + Unpin> {
     pub(crate) state: State<C, N>,
     pub(crate) dsct: Arc<AtomicUsize>,
 }
 
-impl<C: Contribution, N: NodeId> StateMachine<C, N> {
+impl<C: Contribution + Unpin, N: NodeId + Unpin> StateMachine<C, N> {
     /// Returns a new `State::Disconnected`.
     pub(super) fn disconnected() -> StateMachine<C, N> {
         StateMachine {

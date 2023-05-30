@@ -26,14 +26,17 @@ serde = "1"
 serde_bytes = "~0.10.4"
 serde_derive = "1"
 signifix = "0.9"
-futures = "0.1"
-tokio = "~0.1.13"
-tokio-codec = "~0.1.1"
-tokio-io = "~0.1.9"
+
+futures = "0.3.28"
+tokio = { version = "1.27.0", features = ["full"] }
+tokio-util = { version = "0.7.7", features = ["codec"]}
+tokio-stream = "0.1.12"
+
+tokio-serde = "0.8.0"
+tokio-serde-bincode = "0.2.1"
+
 bincode = "1"
-tokio-serde = "0.2"
-tokio-serde-bincode = "0.1"
-bytes = "~0.4.10"
+bytes = "1.4.0"
 uuid = { version = "0.6", features = ["v4", "serde"] }
 byteorder = "1"
 parking_lot = "0.6"

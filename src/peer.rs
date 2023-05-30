@@ -7,7 +7,6 @@ use crate::{
     Contribution, InAddr, InternalMessage, NodeId, OutAddr, Uid, WireMessage, WireMessageKind,
     WireMessages, WireRx, WireTx,
 };
-use futures::sync::mpsc;
 use hbbft::{crypto::PublicKey, dynamic_honey_badger::Input as HbInput};
 use serde::{Deserialize, Serialize};
 use std::{
@@ -17,10 +16,13 @@ use std::{
         HashMap,
     },
 };
-use tokio::prelude::*;
+use futures::{channel::mpsc, StreamExt};
+use std::sync::Arc;
+use parking_lot::{Mutex, RwLock, RwLockReadGuard, RwLockWriteGuard};
+
 
 /// The state for each connected client.
-pub struct PeerHandler<C: Contribution, N: NodeId> {
+pub struct PeerHandler<C: Contribution + Unpin, N: NodeId + Unpin> {
     // Peer nid.
     nid: Option<N>,
 
@@ -39,7 +41,7 @@ pub struct PeerHandler<C: Contribution, N: NodeId> {
     out_addr: OutAddr,
 }
 
-impl<C: Contribution, N: NodeId> PeerHandler<C, N> {
+impl<C: Contribution + Unpin, N: NodeId + Unpin> PeerHandler<C, N> {
     /// Create a new instance of `Peer`.
     pub fn new(
         pub_info: Option<(N, InAddr, PublicKey)>,
@@ -84,114 +86,115 @@ impl<C: Contribution, N: NodeId> PeerHandler<C, N> {
 }
 
 /// A future representing the client connection.
-impl<C: Contribution, N: NodeId> Future for PeerHandler<C, N> {
-    type Item = ();
-    type Error = Error;
+impl<C: Contribution + Unpin, N: NodeId + Unpin> PeerHandler<C, N> {
 
-    fn poll(&mut self) -> Poll<(), Error> {
+    async fn handle(&mut self) -> Result<(), Error> {
         const MESSAGES_PER_TICK: usize = 10;
 
-        // Receive all messages from peers.
+       // Receive all messages from peers.
         for i in 0..MESSAGES_PER_TICK {
-            // Polling an `UnboundedReceiver` cannot fail, so `unwrap` here is
-            // safe.
-            match self.rx.poll().unwrap() {
-                Async::Ready(Some(v)) => {
+        // Polling an `UnboundedReceiver` cannot fail, so `unwrap` here is
+        // safe.
+            match self.rx.next().await {
+                Some(v) => {
                     // Buffer the message. Once all messages are buffered, they will
                     // be flushed to the socket (right below).
-                    self.wire_msgs.start_send(v)?;
+                    self.wire_msgs.send_msg(v).await?;
 
                     // Exceeded max messages per tick, schedule notification:
                     if i + 1 == MESSAGES_PER_TICK {
-                        task::current().notify();
+                        // This is now unnecessary as async/await takes care of it
                     }
                 }
-                _ => break,
+                None => break,
             }
         }
 
         // Flush the write buffer to the socket
-        let _ = self.wire_msgs.poll_complete()?;
+        // let _ = self.wire_msgs.flush().await?;
 
         // Read new messages from the socket
-        while let Async::Ready(message) = self.wire_msgs.poll()? {
+        while let Some(message) = self.wire_msgs.next().await {
             trace!("Received message: {:?}", message);
-
-            if let Some(msg) = message {
-                match msg.into_kind() {
-                    WireMessageKind::HelloRequestChangeAdd(src_nid, _in_addr, _pub_key) => {
-                        error!(
-                            "Duplicate `WireMessage::HelloRequestChangeAdd` \
-                             received from '{:?}'",
-                            src_nid
-                        );
-                    }
-                    WireMessageKind::WelcomeReceivedChangeAdd(src_nid, pk, net_state) => {
-                        self.nid = Some(src_nid.clone());
-                        self.wire_msgs.set_peer_public_key(pk);
-                        self.hdb.send_internal(InternalMessage::wire(
-                            Some(src_nid.clone()),
-                            self.out_addr,
-                            WireMessage::welcome_received_change_add(
-                                src_nid.clone(),
-                                pk,
-                                net_state,
-                            ),
-                        ));
-                    }
-                    WireMessageKind::HelloFromValidator(src_nid, in_addr, pk, net_state) => {
-                        self.nid = Some(src_nid.clone());
-                        self.wire_msgs.set_peer_public_key(pk);
-                        self.hdb.send_internal(InternalMessage::wire(
-                            Some(src_nid.clone()),
-                            self.out_addr,
-                            WireMessage::hello_from_validator(
-                                src_nid.clone(),
-                                in_addr,
-                                pk,
-                                net_state,
-                            ),
-                        ));
-                    }
-                    WireMessageKind::Message(src_nid, msg) => {
-                        if let Some(peer_nid) = self.nid.as_ref() {
-                            debug_assert_eq!(src_nid, *peer_nid);
+            // handle message...
+            match message {
+                Ok(msg) => {
+                    match msg.into_kind() {
+                        WireMessageKind::HelloRequestChangeAdd(src_nid, _in_addr, _pub_key) => {
+                            error!(
+                                "Duplicate `WireMessage::HelloRequestChangeAdd` \
+                                 received from '{:?}'",
+                                src_nid
+                            );
                         }
-
-                        self.hdb.send_internal(InternalMessage::hb_message(
-                            src_nid,
-                            self.out_addr,
-                            msg,
-                        ))
-                    }
-                    WireMessageKind::Transaction(src_nid, txn) => {
-                        if let Some(peer_nid) = self.nid.as_ref() {
-                            debug_assert_eq!(src_nid, *peer_nid);
+                        WireMessageKind::WelcomeReceivedChangeAdd(src_nid, pk, net_state) => {
+                            self.nid = Some(src_nid.clone());
+                            self.wire_msgs.set_peer_public_key(pk);
+                            self.hdb.send_internal(InternalMessage::wire(
+                                Some(src_nid.clone()),
+                                self.out_addr,
+                                WireMessage::welcome_received_change_add(
+                                    src_nid.clone(),
+                                    pk,
+                                    net_state,
+                                ),
+                            ));
                         }
-
-                        self.hdb.send_internal(InternalMessage::hb_contribution(
-                            src_nid,
+                        WireMessageKind::HelloFromValidator(src_nid, in_addr, pk, net_state) => {
+                            self.nid = Some(src_nid.clone());
+                            self.wire_msgs.set_peer_public_key(pk);
+                            self.hdb.send_internal(InternalMessage::wire(
+                                Some(src_nid.clone()),
+                                self.out_addr,
+                                WireMessage::hello_from_validator(
+                                    src_nid.clone(),
+                                    in_addr,
+                                    pk,
+                                    net_state,
+                                ),
+                            ));
+                        }
+                        WireMessageKind::Message(src_nid, msg) => {
+                            if let Some(peer_nid) = self.nid.as_ref() {
+                                debug_assert_eq!(src_nid, *peer_nid);
+                            }
+    
+                            self.hdb.send_internal(InternalMessage::hb_message(
+                                src_nid,
+                                self.out_addr,
+                                msg,
+                            ))
+                        }
+                        WireMessageKind::Transaction(src_nid, txn) => {
+                            if let Some(peer_nid) = self.nid.as_ref() {
+                                debug_assert_eq!(src_nid, *peer_nid);
+                            }
+    
+                            self.hdb.send_internal(InternalMessage::hb_contribution(
+                                src_nid,
+                                self.out_addr,
+                                txn,
+                            ))
+                        }
+                        kind => self.hdb.send_internal(InternalMessage::wire(
+                            self.nid.clone(),
                             self.out_addr,
-                            txn,
-                        ))
+                            kind.into(),
+                        )),
                     }
-                    kind => self.hdb.send_internal(InternalMessage::wire(
-                        self.nid.clone(),
-                        self.out_addr,
-                        kind.into(),
-                    )),
+                },
+                Err(e) => {
+                    // handle error...
+                    error!("Error when receiving message: {:?}", e);
                 }
-            } else {
-                info!("Peer ({}: '{:?}') disconnected.", self.out_addr, self.nid);
-                return Ok(Async::Ready(()));
             }
         }
 
-        Ok(Async::NotReady)
+        Ok(())
     }
 }
 
-impl<C: Contribution, N: NodeId> Drop for PeerHandler<C, N> {
+/* impl<C: Contribution, N: NodeId> Drop for PeerHandler<C, N> {
     fn drop(&mut self) {
         debug!(
             "Removing peer ({}: '{:?}') from the list of peers.",
@@ -212,7 +215,7 @@ impl<C: Contribution, N: NodeId> Drop for PeerHandler<C, N> {
                 .send_internal(InternalMessage::peer_disconnect(nid, self.out_addr));
         }
     }
-}
+} */
 
 #[derive(Clone, Debug)]
 #[allow(dead_code)]

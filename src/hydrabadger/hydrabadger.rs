@@ -7,14 +7,11 @@ use crate::{
     key_gen, BatchRx, Change, Contribution, EpochRx, EpochTx, InAddr, InternalMessage, InternalTx,
     NodeId, OutAddr, WireMessage, WireMessageKind, WireMessages, Transaction,
 };
-use futures::{
-    future::{self, Either},
-    sync::mpsc,
-};
 use hbbft::crypto::{PublicKey, SecretKey};
 use hbbft::dynamic_honey_badger::Batch;
 use parking_lot::{Mutex, RwLock, RwLockReadGuard, RwLockWriteGuard};
 use serde::de::DeserializeOwned;
+use std::borrow::BorrowMut;
 use std::{
     collections::HashSet,
     net::SocketAddr,
@@ -27,12 +24,14 @@ use std::{
 // 测试数据的写入
 use std::fs::{File, OpenOptions, metadata};
 use std::io::{Write, BufWriter};
+use core::pin::Pin;
 use tokio::{
-    self,
     net::{TcpListener, TcpStream},
-    prelude::*,
-    timer::{Delay, Interval},
+    io::AsyncWriteExt,
+    time::{interval, sleep}
 };
+use tokio_stream::*;
+use futures::{channel::mpsc, StreamExt};
 
 // The number of random transactions to generate per interval.
 const DEFAULT_TXN_GEN_COUNT: usize = 5;
@@ -76,7 +75,7 @@ impl Default for Config {
     }
 }
 
-struct Inner<C: Contribution, N: NodeId> {
+struct Inner<C: Contribution + Unpin, N: NodeId + Unpin> {
     /// Node nid:
     nid: N,
     /// Incoming connection socket.
@@ -110,7 +109,7 @@ struct Inner<C: Contribution, N: NodeId> {
 
 /// A `HoneyBadger` network node.
 #[derive(Clone)]
-pub struct Hydrabadger<C: Contribution, N: NodeId> {
+pub struct Hydrabadger<C: Contribution + Unpin, N: NodeId + Unpin> {
     // 节点共享的一些参数
     inner: Arc<Inner<C, N>>,
     // 处理节点内部的消息
@@ -119,7 +118,7 @@ pub struct Hydrabadger<C: Contribution, N: NodeId> {
     batch_rx: Arc<Mutex<Option<BatchRx<C, N>>>>,
 }
 
-impl<C: Contribution, N: NodeId + DeserializeOwned + 'static > Hydrabadger<C, N> {
+impl<C: Contribution + Unpin, N: NodeId + DeserializeOwned + 'static + Unpin> Hydrabadger<C, N> {
     /// Returns a new Hydrabadger node.
     pub fn new(addr: SocketAddr, cfg: Config, nid: N) -> Self {
         // 生成peer节点本地私钥
@@ -320,101 +319,86 @@ impl<C: Contribution, N: NodeId + DeserializeOwned + 'static > Hydrabadger<C, N>
         rx
     }
 
-    /// Returns a future that handles incoming connections on `socket`.
-    fn handle_incoming(self, socket: TcpStream) -> impl Future<Item = (), Error = ()> {
+    // Handles incoming connections on `socket`.
+    async fn handle_incoming(&self, socket: TcpStream) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         info!("Incoming connection from '{}'", socket.peer_addr().unwrap());
-        let wire_msgs: WireMessages<C, N> =
+        let mut wire_msgs: WireMessages<C, N> =
             WireMessages::new(socket, self.inner.secret_key.clone());
 
-        wire_msgs
-            .into_future()
-            .map_err(|(e, _)| e)
-            .and_then(move |(msg_opt, w_messages)| {
-
-                // 判断是不是有message传到本地节点
-                match msg_opt {
-                    // 如果有，根据wiremessage的类型，做对应处理
-                    Some(msg) => match msg.into_kind() {
-                        // 节点连接请求
-                        WireMessageKind::HelloRequestChangeAdd(peer_nid, peer_in_addr, peer_pk) => {
-                            // 将节点添加到本地节点的列表
-                            // NOTE: 调用PeerHandler::new方法处理，处理节点外部来的消息
-                            let peer_h = PeerHandler::new(
-                                Some((peer_nid.clone(), peer_in_addr, peer_pk)),
-                                self.clone(),
-                                w_messages,
-                            );
-
-                            // NOTE: 将HelloRequestChangeAdd消息在节点内部进一步处理hdb().send_internal
-                            peer_h
-                                .hdb()
-                                .send_internal(InternalMessage::new_incoming_connection(
-                                    peer_nid.clone(),
-                                    *peer_h.out_addr(),
-                                    peer_in_addr,
-                                    peer_pk,
-                                    true,
-                                ));
-                            Either::B(peer_h)
-                        }
-                        _ => {
-                            // TODO: Return this as a future-error (handled below):
-                            error!(
-                                "Peer connected without sending \
-                                 `WireMessageKind::HelloRequestChangeAdd`."
-                            );
-                            Either::A(future::ok(()))
-                        }
-                    },
-                    None => {
-                        // The remote client closed the connection without sending
-                        // a welcome_request_change_add message.
-                        Either::A(future::ok(()))
+        while let Some(msg) = wire_msgs.next().await {
+            match msg {
+                Ok(msg) => match msg.into_kind() {
+                    WireMessageKind::HelloRequestChangeAdd(peer_nid, peer_in_addr, peer_pk) => {
+                        // 将节点添加到本地节点的列表
+                        // NOTE: 调用PeerHandler::new方法处理，处理节点外部来的消息
+                        // let mut msgs: WireMessages<C, N> = WireMessages::new(socket, self.inner.secret_key.clone());
+                        let peer_h = PeerHandler::new(
+                            Some((peer_nid.clone(), peer_in_addr, peer_pk)),
+                            self.clone(),
+                            wire_msgs,
+                        );
+    
+                        // NOTE: 将HelloRequestChangeAdd消息在节点内部进一步处理hdb().send_internal
+                        peer_h
+                            .hdb()
+                            .send_internal(InternalMessage::new_incoming_connection(
+                                peer_nid.clone(),
+                                *peer_h.out_addr(),
+                                peer_in_addr,
+                                peer_pk,
+                                true,
+                            ));
                     }
+                    _ => {
+                        // TODO: Return this as a future-error (handled below):
+                        error!(
+                            "Peer connected without sending \
+                             `WireMessageKind::HelloRequestChangeAdd`."
+                        );
+                    }
+                },
+                Err(err) => {
+                    error!("Connection error = {:?}", err);
+                    // return Err(Box<dyError::ConnectError>)
                 }
-            })
-            .map_err(|err| error!("Connection error = {:?}", err))
+            }
+        }
+    
+        Ok(())
     }
 
-    /// Returns a future that connects to new peer.
-    pub(super) fn connect_outgoing(
-        self,
+    // Connects to new peer.
+    pub(super) async fn connect_outgoing(
+        &self,
         remote_addr: SocketAddr,
         local_sk: SecretKey,
         pub_info: Option<(N, InAddr, PublicKey)>,
         is_optimistic: bool,
-    ) -> impl Future<Item = (), Error = ()> {
+    ) -> Result<(), Error> {
         let nid = self.inner.nid.clone();
         let in_addr = self.inner.addr;
 
         info!("Initiating outgoing connection to: {}", remote_addr);
 
-        // NOTE: 和远程节点建立TCP连接
-        TcpStream::connect(&remote_addr)
-            .map_err(Error::from)
-            .and_then(move |socket| {
+        match TcpStream::connect(&remote_addr).await {
+            Ok(mut socket) => {
                 let local_pk = local_sk.public_key();
                 // Wrap the socket with the frame delimiter and codec:
                 let mut wire_msgs = WireMessages::new(socket, local_sk);
+
                 // NOTE: 构建一个wireMessage，类型为hello_request_change_add，准备请求加入，然后发送出去
-                let wire_hello_result = wire_msgs.send_msg(WireMessage::hello_request_change_add(
-                    nid, in_addr, local_pk,
+                let msg = WireMessage::hello_request_change_add(nid, in_addr, local_pk);
+
+                wire_msgs.send_msg(msg).await?;
+
+                // NOTE: 获取请求连接的结果，如果这个连接成功，就在当前节点内部发送new_outgoing_connection消息
+                let peer = PeerHandler::new(pub_info, self.clone(), wire_msgs);
+
+                self.send_internal(InternalMessage::new_outgoing_connection(
+                    *peer.out_addr(),
                 ));
-                // 获取请求连接的结果，如果这个连接成功，就在当前节点内部发送new_outgoing_connection消息
-                match wire_hello_result {
-                    Ok(_) => {
-                        let peer = PeerHandler::new(pub_info, self.clone(), wire_msgs);
-
-                        self.send_internal(InternalMessage::new_outgoing_connection(
-                            *peer.out_addr(),
-                        ));
-
-                        Either::A(peer)
-                    }
-                    Err(err) => Either::B(future::err(err)),
-                }
-            })
-            .map_err(move |err| {
+            }
+            Err(err) => {
                 if is_optimistic {
                     warn!(
                         "Unable to connect to: {} ({e:?}: {e})",
@@ -424,83 +408,73 @@ impl<C: Contribution, N: NodeId + DeserializeOwned + 'static > Hydrabadger<C, N>
                 } else {
                     error!("Error connecting to: {} ({e:?}: {e})", remote_addr, e = err);
                 }
-            })
+
+                return Err(Error::ConnectError)
+            }
+        }
+        Ok(())
     }
 
     // 产生contribution交易
-    fn generate_contributions(
-        self,
+    async fn generate_contributions(
+        &self,
         // 注意这里传入的时候是一个闭包
         gen_txns: Option<fn(usize, usize) -> C>,
-    ) -> impl Future<Item = (), Error = ()> {
+    ) -> Result<(), Error> {
         if let Some(gen_txns) = gen_txns {
-            let epoch_stream = self.register_epoch_listener();
+            let mut epoch_stream = self.register_epoch_listener();
             let gen_delay = self.inner.config.txn_gen_interval;
-            // 每隔一个时间间隔生成一个contribution
-            let gen_cntrb = epoch_stream
-                .and_then(move |epoch_no| {
-                    Delay::new(Instant::now() + Duration::from_millis(gen_delay))
-                        .map_err(|err| panic!("Timer error: {:?}", err))
-                        .and_then(move |_| Ok(epoch_no))
-                })
-                .for_each(move |_epoch_no| {
-                    let hdb = self.clone();
 
-                    if let StateDsct::Validator = hdb.state_dsct_stale() {
-                        info!(
-                            "Generating and sending {} random transactions...",
-                            self.inner.config.txn_gen_count
-                        );
-                        // Send some random transactions to our internal HB instance.
-                        // 这里会实际调用匿名函数，产生随机交易
-                        let txns = gen_txns(
-                            self.inner.config.txn_gen_count,
-                            self.inner.config.txn_gen_bytes,
-                        );
+            while let Some(epoch_no) = epoch_stream.next().await {
+                tokio::time::sleep(Duration::from_millis(gen_delay)).await;
 
-                        println!("++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++");
-                        println!("++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++");
-                        println!("++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++");
-                        println!("我们本地的节点产生的随机交易数据为{:?}", txns);
-                        println!("++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++");
-                        println!("++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++");
-                        println!("++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++");
+                let hdb = self.clone();
 
-                        // 发送节点内部消息
-                        hdb.send_internal(InternalMessage::hb_contribution(
-                            hdb.inner.nid.clone(),
-                            OutAddr(*hdb.inner.addr),
-                            // contribution是一个泛型，可以是任何类型的数据，比如具体的交易等等
-                            txns,
-                        ));
-                    }
-                    Ok(())
-                })
-                .map_err(|err| panic!("Contribution generation error: {:?}", err));
+                if let StateDsct::Validator = hdb.state_dsct_stale() {
+                    info!(
+                        "Generating and sending {} random transactions...",
+                        self.inner.config.txn_gen_count
+                    );
+                    let txns = gen_txns(
+                        self.inner.config.txn_gen_count,
+                        self.inner.config.txn_gen_bytes,
+                    );
 
-            Either::A(gen_cntrb)
-        } else {
-            Either::B(future::ok(()))
+                    println!("++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++");
+                    println!("++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++");
+                    println!("++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++");
+                    println!("我们本地的节点产生的随机交易数据为{:?}", txns);
+                    println!("++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++");
+                    println!("++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++");
+                    println!("++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++");
+
+                    hdb.send_internal(InternalMessage::hb_contribution(
+                        hdb.inner.nid.clone(),
+                        OutAddr(*hdb.inner.addr),
+                        txns,
+                    ));
+                }
+            }
         }
+
+        Ok(())
     }
 
     /// Returns a future that generates random transactions and logs status
     /// messages.
-    fn log_status(self) -> impl Future<Item = (), Error = ()> {
-        Interval::new(
-            Instant::now(),
-            Duration::from_millis(self.inner.config.txn_gen_interval),
-        )
-        .for_each(move |_| {
+    async fn log_status(&self) -> Result<(), Error> {
+        let mut interval = tokio::time::interval(Duration::from_millis(self.inner.config.txn_gen_interval));
+
+        loop {
+            let _ = interval.tick().await;
+        
             let hdb = self.clone();
             let peers = hdb.peers();
-
-            // Log state:
+        
             let dsct = hdb.state_dsct_stale();
             let peer_count = peers.count_total();
             info!("Current Node Role State: {:?}(connect with {} peer nodes)", dsct, peer_count);
-
-            // Log peer list:
+        
             let peer_list = peers
                 .peers()
                 .map(|p| {
@@ -510,50 +484,38 @@ impl<C: Contribution, N: NodeId + DeserializeOwned + 'static > Hydrabadger<C, N>
                 })
                 .collect::<Vec<_>>();
             info!("    Peers: {:?}", peer_list);
-
-            // Log (trace) full peerhandler details:
+        
             trace!("PeerHandler list:");
             for (peer_addr, _peer) in peers.iter() {
                 trace!("     peer_addr: {}", peer_addr);
             }
+        }
 
-            drop(peers);
-
-            Ok(())
-        })
-        .map_err(|err| panic!("List connection interval error: {:?}", err))
+        Ok(())
     }
 
     /// Binds to a host address and returns a future which starts the node.
-    pub fn node(
+    pub async fn node(
         self,
         remotes: Option<HashSet<SocketAddr>>,
         gen_txns: Option<fn(usize, usize) -> C>,
-    ) -> impl Future<Item = (), Error = ()> {
-        let socket = TcpListener::bind(&self.inner.addr).unwrap();
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let listener = TcpListener::bind(&self.inner.addr.0).await?;
         info!("Listening on: {}", self.inner.addr);
-
+    
         let remotes = remotes.unwrap_or_default();
-
+    
         let hdb = self.clone();
-        // 0. 与远程节点建立连接(从节点角度看，是消息进来)
-        let listen = socket
-            .incoming()
-            .map_err(|err| error!("Error accepting socket: {:?}", err))
-            // 对于每个过来的connection，都会新建一个协程与其连接通信，同时调用hdb的handle_incoming方法来处理即将收到的消息
-            .for_each(move |socket| {
-                // NOTE: hdb.clone().handle_incoming   (主要是TCP连接)
+        let listen = async {
+            while let Ok((socket, _)) = listener.accept().await {
                 tokio::spawn(hdb.clone().handle_incoming(socket));
-                Ok(())
-            });
-
+            }
+        };
+    
         let hdb = self.clone();
-        // 1. 与远程节点建立连接（从节点角度来看，是消息出去）
-        // NOTE: 这里的处理流程是： 其他节点connect本地节点，本地节点通过listen监听到消息
         let local_sk = hdb.inner.secret_key.clone();
-        let connect = future::lazy(move || {
+        let connect = async {
             for &remote_addr in remotes.iter().filter(|&&ra| ra != hdb.inner.addr.0) {
-                // NOTE: hdb.clone().connect_outgoing
                 tokio::spawn(hdb.clone().connect_outgoing(
                     remote_addr,
                     local_sk.clone(),
@@ -561,26 +523,26 @@ impl<C: Contribution, N: NodeId + DeserializeOwned + 'static > Hydrabadger<C, N>
                     true,
                 ));
             }
-            Ok(())
-        });
-
-        // 2 NOTE: hydrabadger.handle()
-        let hdb_handler = self
-            .handler()
-            .map_err(|err| error!("Handler internal error: {:?}", err));
-
-        // 3 记录log
+        };
+    
+        let hdb_handler = match self.handler() {
+            Some(handler) => handler.run(),
+            None => {
+                error!("Handler internal error: Handler is None");
+                return Err(Box::new(std::io::Error::new(std::io::ErrorKind::Other, "Handler is None")));
+            }
+        };
+    
         let log_status = self.clone().log_status();
-
-        // 4. 产生contribution，这个后续可以通过queueing hdb，目前只是dhb
+    
         let generate_contributions = self.clone().generate_contributions(gen_txns);
-
-        // 5. 起一个单独的协程，专门来消费batch数据，打包为区块
+    
         let hdb_clone = self.clone();
-        let produce_block = future::lazy(move || {
+        let produce_block = async {
             let batch_receiver = hdb_clone.batch_rx().unwrap();
             let mut last_block_time = Instant::now();
-            batch_receiver.for_each(move |block| {
+            while let Some(block) = batch_receiver.next().await {
+                // Rest of the code
                 let current_epoch = block.epoch();
                 println!("********************current epoch:{:?}***********************************", current_epoch);
                 // Calculate the time interval since the last block
@@ -616,7 +578,7 @@ impl<C: Contribution, N: NodeId + DeserializeOwned + 'static > Hydrabadger<C, N>
                 let mut writer = BufWriter::new(file);
 
                 if should_write_headers {
-                    let headers = ["epoch_id", "validator num", "contributor num", "tx num of contribution", "tx size(Bytes)/tx", "tx num of block", "epoch_time(latency)"];
+                    let headers = ["epoch_id", "validator num", "contributor num", "tx num of contribution", "tx size(Bytes)/tx", "block num", "epoch_time(latency)"];
                     let header_line = format!("\n | {} | {} | {} | {} | {} | {} | {} |\n", headers[0], headers[1], headers[2], headers[3], headers[4], headers[5], headers[6]);
                     let separator_line = "|:-------:|:-------:|:-------:|:-------:|:-------:|:-------:|:-------:|\n";
                     writer.write_all(header_line.as_bytes()).unwrap();
@@ -637,26 +599,49 @@ impl<C: Contribution, N: NodeId + DeserializeOwned + 'static > Hydrabadger<C, N>
                 // write data
                 let data_format = format!("| {} | {} | {} | {} | {} | {} | {} |\n", data[0], data[1], data[2], data[3], data[4], data[5], data[6]);
                 writer.write_all(data_format.as_bytes()).unwrap();
-                Ok(())
-            })
+                Ok(());
+            }
+        };
+    
+        tokio::try_join!(listen, connect, hdb_handler, log_status, generate_contributions, produce_block)?;
+
+/*         tokio::spawn(async {
+            match self.handle_incoming(socket).await {
+                Ok(_) => println!("handle_incoming completed successfully."),
+                Err(e) => eprintln!("handle_incoming encountered an error: {:?}", e),
+            }
         });
-
-        // 监听所有的协程
-        listen
-            .join5(connect, hdb_handler, log_status, generate_contributions)
-            .map(|(..)| ())
-            .join(produce_block)
-            .map(|(..)| ())
-
+        
+        tokio::spawn(async {
+            match self.connect_outgoing(remote_addr, local_sk, pub_info, is_optimistic).await {
+                Ok(_) => println!("connect_outgoing completed successfully."),
+                Err(e) => eprintln!("connect_outgoing encountered an error: {:?}", e),
+            }
+        });
+        
+        tokio::spawn(async {
+            match self.generate_contributions(gen_txns).await {
+                Ok(_) => println!("generate_contributions completed successfully."),
+                Err(e) => eprintln!("generate_contributions encountered an error: {:?}", e),
+            }
+        });
+        
+        tokio::spawn(async {
+            match self.log_status().await {
+                Ok(_) => println!("log_status completed successfully."),
+                Err(e) => eprintln!("log_status encountered an error: {:?}", e),
+            }
+        }); */
+        Ok(())
     }
 
     /// Starts a node.
-    pub fn run_node(
+    pub async fn run_node(
         self,
         remotes: Option<HashSet<SocketAddr>>,
         gen_txns: Option<fn(usize, usize) -> C>,
     ) {
-        tokio::run(self.node(remotes, gen_txns));
+        self.node(remotes, gen_txns).await;
     }
 
     pub fn addr(&self) -> &InAddr {

@@ -20,10 +20,10 @@ use hbbft::{
 };
 use rand::Rng;
 use std::{cell::RefCell, collections::HashMap, time::Duration};
-use tokio::{self, prelude::*};
 use rand::thread_rng;
+use futures::StreamExt;
 /// Hydrabadger event (internal message) handler.
-pub struct Handler<C: Contribution, N: NodeId> {
+pub struct Handler<C: Contribution + Unpin, N: NodeId + Unpin> {
     hdb: Hydrabadger<C, N>,
     // TODO: 
     peer_internal_rx: InternalRx<C, N>,
@@ -38,7 +38,7 @@ pub struct Handler<C: Contribution, N: NodeId> {
     key_gens: RefCell<HashMap<Uid, key_gen::Machine<N>>>,
 }
 
-impl<C: Contribution, N: NodeId> Handler<C, N> {
+impl<C: Contribution + Unpin, N: NodeId + Unpin> Handler<C, N> {
     pub(super) fn new(
         hdb: Hydrabadger<C, N>,
         peer_internal_rx: InternalRx<C, N>,
@@ -619,196 +619,148 @@ impl<C: Contribution, N: NodeId> Handler<C, N> {
 // NOTE: 这里是重写future的poll方法，这个poll方法的实现就是为了推动这个future的执行的，
 // 这个方法是自动触发的，所以会一直调用这个方法，直到达到某个条件，最终返回ready才算执行完
 // 也就是说，整个节点的状态，消息处理怎么推进，共识结果怎么处理，都是在这个方法里面去定义的
-impl<C: Contribution, N: NodeId> Future for Handler<C, N> {
-    type Item = ();
-    type Error = Error;
-
-    /// Polls the internal message receiver until all txs are dropped.
-    fn poll(&mut self) -> Poll<(), Error> {
+impl<C: Contribution + Unpin, N: NodeId + Unpin> Handler<C, N> {
+    pub async fn run(mut self) -> Result<(), Error> {
         // Ensure the loop can't hog the thread for too long:
         const MESSAGES_PER_TICK: usize = 50;
-
-        let mut state = self.hdb.state_mut();
-
-        // 1. NOTE: 处理要过来的internal messages，这里有一个循环限制次数，防止当前线程过多占用导致阻塞
-        for i in 0..MESSAGES_PER_TICK {
-            // 首先从peer_internal_rx中轮询内部消息
-            match self.peer_internal_rx.poll() {
-                // 如果成功接收到一个内部消息，就会调用handle_internal_message来处理，这里需要注意就是
-                // 如果这个时候线程占用结束，下一次开启的时候线程内部会有notify方法重新唤醒
-                Ok(Async::Ready(Some(i_msg))) => {
-                    self.handle_internal_message(i_msg, &mut state)?;
-
-                    // Exceeded max messages per tick, schedule notification:
-                    if i + 1 == MESSAGES_PER_TICK {
-                        task::current().notify();
+        loop {
+            let mut state = self.hdb.state_mut();
+            // 1. NOTE: Process incoming internal messages
+            for _ in 0..MESSAGES_PER_TICK {
+                match self.peer_internal_rx.next().await {
+                    Some(i_msg) => {
+                        self.handle_internal_message(i_msg, &mut state)?;
                     }
-                }
-                // 断开连接
-                Ok(Async::Ready(None)) => {
-                    // The sending ends have all dropped.
-                    info!("Shutting down Handler...");
-                    return Ok(Async::Ready(()));
-                }
-                // 没有收到内部消息
-                Ok(Async::NotReady) => {}
-                Err(()) => return Err(Error::HydrabadgerHandlerPoll),
-            };
-        }
-
-
-        // 2. NOTE: 处理要发出去的消息
-        let peers = self.hdb.peers();
-        // Process outgoing wire queue:
-        while let Some((tar_nid, msg, retry_count)) = self.wire_queue.pop() {
-            if retry_count < WIRE_MESSAGE_RETRY_MAX {
-                info!(
-                    "Sending queued message from retry queue (retry_count: {})",
-                    retry_count
-                );
-                peers.wire_to(tar_nid, msg, retry_count);
-            } else {
-                info!("Discarding queued message for '{:?}': {:?}", tar_nid, msg);
+                    None => {
+                        // The sending ends have all dropped.
+                        info!("Shutting down Handler...");
+                        return Ok(());
+                    }
+                };
             }
-        }
 
-        trace!("hydrabadger::Handler: Processing step queue....");
-
-
-        // 3. NOTE: 处理hbbft的输出，也就是最终的batch，这是重点
-        while let Some(mut step) = self.step_queue.pop() {
-            for batch in step.output.drain(..) {
-                info!("A HONEY BADGER BATCH WITH CONTRIBUTIONS IS BEING STREAMED...");
-                // info!("Batch:\n{:?}", batch);
-
-                let batch_epoch = batch.epoch();
-                let prev_epoch = self.hdb.set_current_epoch(batch_epoch + 1);
-                assert_eq!(prev_epoch, batch_epoch);
-
-                if let Some(jp) = batch.join_plan() {
-                    // FIXME: Only sent to unconnected nodes:
-                    debug!("Outputting join plan: {:?}", jp);
-                    peers.wire_to_all(WireMessage::join_plan(jp));
+            // 2. NOTE: Process outgoing messages
+            let peers = self.hdb.peers();
+            // Process outgoing wire queue:
+            while let Some((tar_nid, msg, retry_count)) = self.wire_queue.pop() {
+                if retry_count < WIRE_MESSAGE_RETRY_MAX {
+                    info!(
+                        "Sending queued message from retry queue (retry_count: {})",
+                        retry_count
+                    );
+                    peers.wire_to(tar_nid, msg, retry_count);
+                } else {
+                    info!("Discarding queued message for '{:?}': {:?}", tar_nid, msg);
                 }
+            }
 
-                println!("debuging@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@");
-                println!("当前这个batch的change为{:?}！！！！！！", batch.change());
-                println!("debuging@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@");
+            trace!("hydrabadger::Handler: Processing step queue....");
 
-                // 看batch中记录了当前网络有哪些变动，比如节点变更
-                match batch.change() {
-                    ChangeState::None => {}
-                    ChangeState::InProgress(_change) => {}
-                    ChangeState::Complete(change) => match change {
-                        DhbChange::NodeChange(pub_keys) => {
+            // 3. NOTE: 处理hbbft的输出，也就是最终的batch，这是重点
+            while let Some(mut step) = self.step_queue.pop() {
+                for batch in step.output.drain(..) {
+                    info!("A HONEY BADGER BATCH WITH CONTRIBUTIONS IS BEING STREAMED...");
+                    // info!("Batch:\n{:?}", batch);
 
-                            /* let observers: Vec<_> = state
-                                .dhb()
-                                .unwrap()
-                                .netinfo()
-                                .public_key_map()
-                                .keys()
-                                .filter(|id| !state.dhb().unwrap().netinfo().is_node_validator(id))
-                                .cloned()
-                                .collect();
+                    let batch_epoch = batch.epoch();
+                    let prev_epoch = self.hdb.set_current_epoch(batch_epoch + 1);
+                    assert_eq!(prev_epoch, batch_epoch);
 
-                            let mut promoted = false;
+                    if let Some(jp) = batch.join_plan() {
+                        // FIXME: Only sent to unconnected nodes:
+                        debug!("Outputting join plan: {:?}", jp);
+                        peers.wire_to_all(WireMessage::join_plan(jp));
+                    }
 
-                            for observer_id in observers {
-                                if let Some(pk) = pub_keys.get(&observer_id) {
-                                    if state.discriminant() == StateDsct::Observer {
-                                        state.promote_to_validator()?;
-                                        promoted = true;
-                                    }
-                                }
-                            }
+                    println!("debuging@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@");
+                    println!("当前这个batch的change为{:?}！！！！！！", batch.change());
+                    println!("debuging@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@");
 
-                            if !promoted {
+                    // 看batch中记录了当前网络有哪些变动，比如节点变更
+                    match batch.change() {
+                        ChangeState::None => {}
+                        ChangeState::InProgress(_change) => {}
+                        ChangeState::Complete(change) => match change {
+                            DhbChange::NodeChange(pub_keys) => {
+                    
                                 if let Some(pk) = pub_keys.get(self.hdb.node_id()) {
                                     assert_eq!(*pk, self.hdb.secret_key().public_key());
                                     assert!(state.dhb().unwrap().netinfo().is_validator());
+                                    if state.discriminant() == StateDsct::Observer {
+                                        state.promote_to_validator()?;
+                                    }
                                 }
-                            } */
-                        
+                                // FIXME: Handle removed nodes.
+                            }
+                            // FIXME
+                            DhbChange::EncryptionSchedule(_schedule) => {}
+                        },
+                    }
 
-                            if let Some(pk) = pub_keys.get(self.hdb.node_id()) {
-                                assert_eq!(*pk, self.hdb.secret_key().public_key());
-                                assert!(state.dhb().unwrap().netinfo().is_validator());
-                                if state.discriminant() == StateDsct::Observer {
-                                    state.promote_to_validator()?;
+                    let extra_delay = self.hdb.config().output_extra_delay_ms;
+
+                    if extra_delay > 0 {
+                        info!("Delaying batch processing thread for {}ms", extra_delay);
+                        ::std::thread::sleep(::std::time::Duration::from_millis(extra_delay));
+                    }
+
+                    // 通过batch所在的通道，发送当前产生的所有交易
+                    if !self.batch_tx.is_closed() {
+                        if let Err(_err) = self.batch_tx.unbounded_send(batch) {
+                            error!("Unable to send batch output. Shutting down...");
+                            return Ok(());
+                        } else {
+                            // Notify epoch listeners that a batch has been output.
+                            let mut dropped_listeners = Vec::new();
+                            for (i, listener) in self.hdb.epoch_listeners().iter().enumerate() {
+                                if let Err(_err) = listener.unbounded_send(batch_epoch + 1) {
+                                    dropped_listeners.push(i);
+                                    error!("Epoch listener {} has dropped.", i);
                                 }
                             }
-                            // FIXME: Handle removed nodes.
+                            // TODO: Remove dropped listeners from the list (see
+                            // comment on `Inner::epoch_listeners`).
                         }
-                        // FIXME
-                        DhbChange::EncryptionSchedule(_schedule) => {}
-                    },
-                }
-
-                let extra_delay = self.hdb.config().output_extra_delay_ms;
-
-                if extra_delay > 0 {
-                    info!("Delaying batch processing thread for {}ms", extra_delay);
-                    ::std::thread::sleep(::std::time::Duration::from_millis(extra_delay));
-                }
-
-                // 通过batch所在的通道，发送当前产生的所有交易
-                if !self.batch_tx.is_closed() {
-                    if let Err(_err) = self.batch_tx.unbounded_send(batch) {
-                        error!("Unable to send batch output. Shutting down...");
-                        return Ok(Async::Ready(()));
                     } else {
-                        // Notify epoch listeners that a batch has been output.
-                        let mut dropped_listeners = Vec::new();
-                        for (i, listener) in self.hdb.epoch_listeners().iter().enumerate() {
-                            if let Err(_err) = listener.unbounded_send(batch_epoch + 1) {
-                                dropped_listeners.push(i);
-                                error!("Epoch listener {} has dropped.", i);
-                            }
+                        info!("Batch output receiver dropped. Shutting down...");
+                        return Ok(());
+                    }
+                }
+
+                for hb_msg in step.messages.drain(..) {
+                    // info!("hydrabadger::Handler: Forwarding message: {:?}", hb_msg);
+                    match hb_msg.target {
+                        Target::Node(p_nid) => {
+                            peers.wire_to(
+                                p_nid,
+                                WireMessage::message(self.hdb.node_id().clone(), hb_msg.message),
+                                0,
+                            );
                         }
-                        // TODO: Remove dropped listeners from the list (see
-                        // comment on `Inner::epoch_listeners`).
+                        Target::All => {
+                            peers.wire_to_all(WireMessage::message(
+                                self.hdb.node_id().clone(),
+                                hb_msg.message,
+                            ));
+                        }
                     }
-                } else {
-                    info!("Batch output receiver dropped. Shutting down...");
-                    return Ok(Async::Ready(()));
+                }
+
+                if !step.fault_log.is_empty() {
+                    error!("    FAULT LOG: \n{:?}", step.fault_log);
                 }
             }
 
-            for hb_msg in step.messages.drain(..) {
-                // info!("hydrabadger::Handler: Forwarding message: {:?}", hb_msg);
-                match hb_msg.target {
-                    Target::Node(p_nid) => {
-                        peers.wire_to(
-                            p_nid,
-                            WireMessage::message(self.hdb.node_id().clone(), hb_msg.message),
-                            0,
-                        );
-                    }
-                    Target::All => {
-                        peers.wire_to_all(WireMessage::message(
-                            self.hdb.node_id().clone(),
-                            hb_msg.message,
-                        ));
-                    }
-                }
-            }
+            // TODO: Iterate through `state.dhb().unwrap().dyn_hb().netinfo()` and
+            // `peers` to ensure that the lists match. Make adjustments where
+            // necessary.
 
-            if !step.fault_log.is_empty() {
-                error!("    FAULT LOG: \n{:?}", step.fault_log);
-            }
+            trace!("hydrabadger::Handler: Step queue processing complete.");
+
+            drop(peers);
+            drop(state);
+            trace!("hydrabadger::Handler::poll: 'state' unlocked for writing.");
         }
 
-        // TODO: Iterate through `state.dhb().unwrap().dyn_hb().netinfo()` and
-        // `peers` to ensure that the lists match. Make adjustments where
-        // necessary.
-
-        trace!("hydrabadger::Handler: Step queue processing complete.");
-
-        drop(peers);
-        drop(state);
-        trace!("hydrabadger::Handler::poll: 'state' unlocked for writing.");
-
-        Ok(Async::NotReady)
     }
 }

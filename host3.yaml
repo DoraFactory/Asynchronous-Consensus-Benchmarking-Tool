@@ -1,0 +1,65 @@
+version: '2.1'
+services:
+  node15:
+    image: csj123/hbbft-node:latest
+    command: bash -c "peer_node -b 10.0.16.163:8001 -r 10.0.16.6:8007 -r 10.0.16.163:8003 --txn-gen-count=100 --txn-bytes=2"
+    container_name: hbb-node1
+    privileged: true
+    cpuset: '0,1'
+    mem_limit: 512M
+    network_mode: host
+
+  node16:
+    image: csj123/hbbft-node:latest
+    command: bash -c "peer_node -b 10.0.16.163:8002 -r 10.0.16.163:8001 -r 10.0.16.163:8003 --txn-gen-count=100 --txn-bytes=2"
+    container_name: hbb-node2
+    privileged: true
+    cpuset: '2,3'
+    mem_limit: 512M
+    network_mode: host
+
+
+  node17:
+    image: csj123/hbbft-node:latest
+    command: bash -c "peer_node -b 10.0.16.163:8003 -r 10.0.16.163:8002 -r 10.0.16.163:8004 --txn-gen-count=100 --txn-bytes=2"
+    container_name: hbb-node3
+    privileged: true
+    cpuset: '4,5'
+    mem_limit: 512M
+    network_mode: host
+
+  node18:
+    image: csj123/hbbft-node:latest
+    command: bash -c "peer_node -b 10.0.16.163:8004 -r 10.0.16.163:8003  -r 10.0.16.163:8005 --txn-gen-count=100 --txn-bytes=2"
+    container_name: hbb-node4
+    privileged: true
+    cpuset: '6,7'
+    mem_limit: 512M
+    network_mode: host
+
+  node19:
+    image: csj123/hbbft-node:latest
+    command: bash -c "peer_node -b 10.0.16.163:8005 -r 10.0.16.163:8006 -r 10.0.16.163:8004 --txn-gen-count=100 --txn-bytes=2"
+    container_name: hbb-node5
+    privileged: true
+    cpuset: '8,9'
+    mem_limit: 512M
+    network_mode: host
+
+  node20:
+    image: csj123/hbbft-node:latest
+    command: bash -c "peer_node -b 10.0.16.163:8006 -r 10.0.16.163:8005 -r 10.0.16.163:8007 --txn-gen-count=100 --txn-bytes=2"
+    container_name: hbb-node6
+    privileged: true
+    cpuset: '10,11'
+    mem_limit: 512M
+    network_mode: host
+
+  node21:
+    image: csj123/hbbft-node:latest
+    command: bash -c "peer_node -b 10.0.16.163:8007 -r 10.0.16.163:8006 -r 10.0.16.163:8008 --txn-gen-count=100 --txn-bytes=2"
+    container_name: hbb-node7
+    privileged: true
+    cpuset: '12,13'
+    mem_limit: 512M
+    network_mode: host
