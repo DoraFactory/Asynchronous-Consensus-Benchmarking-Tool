@@ -457,12 +457,10 @@ impl<C: Contribution, N: NodeId + DeserializeOwned + 'static > Hydrabadger<C, N>
                             self.inner.config.txn_gen_count,
                             self.inner.config.txn_gen_bytes,
                         );
-
+                        
                         println!("++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++");
                         println!("++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++");
-                        println!("++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++");
-                        println!("我们本地的节点产生的随机交易数据为{:?}", txns);
-                        println!("++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++");
+                        println!("我们本地的节点产生的随机transaction数量为{:?}, 每个transaction的大小为{:?}Bytes", self.inner.config.txn_gen_count, self.inner.config.txn_gen_bytes);
                         println!("++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++");
                         println!("++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++");
 
@@ -595,7 +593,7 @@ impl<C: Contribution, N: NodeId + DeserializeOwned + 'static > Hydrabadger<C, N>
                 println!("****************************************************************");
 
                 // validator数量
-                let validator_numbers = hdb_clone.peers().count_validators() + 1;
+                let validator_numbers = hdb_clone.peers().count_total() + 1;
 
                 // 将测试结果以nodeid命名的md文件
                 let file_name = hdb_clone.get_nid() + ".md";
