@@ -323,6 +323,40 @@ We also provide a script for setting the Docker container delay, which is used t
 **More test cases**  
 If you want to try more test cases, you can customize them based on the above test scripts to obtain the desired test result data.
 
+###  Automated Data Analysis
+In order to facilitate the creation of intuitive test reports, we also provide some python scripts in `process_data` dir to generate data graphs for some key metrics. This is crucial for us to observe the experimental results under different metrics.
+
+> Go into the `scripts/process_data`
+
+**Observe average latency and throughout**
+
+You can run:
+```python
+python average_latency_throuthout.py
+```
+You can get `average_latency_throuthout.png` in `analysis-fig` dir:
+![average_latency_throuthout](./scripts/analysis-fig/average_latency_throuthout.png)
+
+**Observer three group average latency and throughout**
+
+You can run: 
+```python
+python three_group_average_latency_throuthout.py
+```
+You can get `three_group_average_latency_throuthout.png` in `analysis-fig` dir:
+![three_group_average_latency_throuthout](./scripts/analysis-fig/three_group_average_latency_throuthout.png)
+
+**Observe three-dimension average latency and throughout**
+
+You can run: 
+```python
+python threedimension_average_latency_throuthout.py
+```
+You can get `threedimension_average_latency_throuthout.png` in `analysis-fig` dir:
+![threedimension_average_latency_throuthout](./scripts/analysis-fig/threedimension_average_latency_throuthout.png)
+
+Also,  If you feel that our data analysis metrics are not sufficient, you can also design your desired data analysis format based on the data in the "test-data" folder.
+
 ## Bounties
 
 A bounty program will be launched to allow community developers to participate in benchmarking async consensus protocols and contribute to this repo. The program will be launched later this month.
