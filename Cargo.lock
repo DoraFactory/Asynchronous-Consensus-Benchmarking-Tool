@@ -575,7 +575,7 @@ dependencies = [
 [[package]]
 name = "hbbft"
 version = "0.1.0"
-source = "git+https://github.com/DoraFactory/HBBFT.git?branch=main#d40f912570508c67235b76ab411a3d389788b082"
+source = "git+https://github.com/DoraFactory/Asynchronous-Consensus.git?branch=main#d0db759222d3dba24267d624e440774c50539ebe"
 dependencies = [
  "bincode 1.3.3",
  "byteorder",
