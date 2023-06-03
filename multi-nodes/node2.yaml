@@ -56,7 +56,7 @@ services:
 
   node14:
     image: dorafactory/hbbft-node:latest
-    command: bash -c "peer_node -b ${LOCAL}:8007 -r ${LOCAL}:8006 -r ${REMOTE1}:8001 -r ${REMOTE2}:8001 --txn-gen-count=${TXN_GEN_COUNT} --txn-bytes=${TXN_BYTES}"
+    command: bash -c "peer_node -b ${LOCAL}:8007 -r ${LOCAL}:8006 -r ${LOCAL}:8008 -r ${REMOTE1}:8001 --txn-gen-count=${TXN_GEN_COUNT} --txn-bytes=${TXN_BYTES}"
     container_name: hbb-node7
     privileged: true
     cpuset: '12,13'

@@ -52,6 +52,10 @@ pub enum Error {
     InstantiateHbListenerDropped,
     #[fail(display = "Message received from unknown peer while attempting to verify")]
     VerificationMessageReceivedUnknownPeer,
+    #[fail(display = "Handle internal message error")]
+    InternalMsgErr,
+    #[fail(display = "No peer found in addresses")]
+    NoPeerFound
 }
 
 impl From<std::io::Error> for Error {

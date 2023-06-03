@@ -18,20 +18,20 @@ use hbbft::{
     sync_key_gen::{Ack, Part},
     Target,
 };
+use rand::thread_rng;
 use rand::Rng;
 use std::{cell::RefCell, collections::HashMap, time::Duration};
 use tokio::{self, prelude::*};
-use rand::thread_rng;
 /// Hydrabadger event (internal message) handler.
 pub struct Handler<C: Contribution, N: NodeId> {
     hdb: Hydrabadger<C, N>,
-    // TODO: 
+    // TODO:
     peer_internal_rx: InternalRx<C, N>,
     /// 外部消息队列(多生产者多消费者队列)
     wire_queue: SegQueue<(N, WireMessage<C, N>, usize)>,
     /// 存储HoneyBadger输出的队列
     step_queue: SegQueue<Step<C, N>>,
-    // TODO: 
+    // TODO:
     batch_tx: BatchTx<C, N>,
     /// DKG的实例
     // TODO: 这个后续可以作为一个单独的线程
@@ -89,7 +89,6 @@ impl<C: Contribution, N: NodeId> Handler<C, N> {
         }
         Ok(())
     }
-
 
     // NOTE: 核心方法，处理相关的input和消息
     fn handle_iom(
@@ -465,7 +464,7 @@ impl<C: Contribution, N: NodeId> Handler<C, N> {
                 }
 
                 // Send response to remote peer:
-                peers
+/*                 peers
                     .get(&src_out_addr)
                     .unwrap()
                     .tx()
@@ -474,7 +473,28 @@ impl<C: Contribution, N: NodeId> Handler<C, N> {
                         self.hdb.secret_key().public_key(),
                         net_state,
                     ))
-                    .unwrap();
+                    .unwrap(); */
+
+                if let Some(peer) = peers.get(&src_out_addr) {
+                    match peer
+                        .tx()
+                        .unbounded_send(WireMessage::welcome_received_change_add(
+                            self.hdb.node_id().clone(),
+                            self.hdb.secret_key().public_key(),
+                            net_state,
+                        )) {
+                        Ok(()) => (),
+                        Err(e) => {
+                            error!("Failed to send welcome message: {}", e);
+                            // 进行错误处理
+                            return Err(Error::InternalMsgErr)
+                        }
+                    }
+                } else {
+                    error!("No peer found with address: {}", src_out_addr);
+                    // 进行错误处理
+                    return Err(Error::NoPeerFound)
+                }
 
                 // Modify state accordingly:
                 self.handle_new_established_peer(
@@ -656,7 +676,6 @@ impl<C: Contribution, N: NodeId> Future for Handler<C, N> {
             };
         }
 
-
         // 2. NOTE: 处理要发出去的消息
         let peers = self.hdb.peers();
         // Process outgoing wire queue:
@@ -673,7 +692,6 @@ impl<C: Contribution, N: NodeId> Future for Handler<C, N> {
         }
 
         trace!("hydrabadger::Handler: Processing step queue....");
-
 
         // 3. NOTE: 处理hbbft的输出，也就是最终的batch，这是重点
         while let Some(mut step) = self.step_queue.pop() {
@@ -701,7 +719,6 @@ impl<C: Contribution, N: NodeId> Future for Handler<C, N> {
                     ChangeState::InProgress(_change) => {}
                     ChangeState::Complete(change) => match change {
                         DhbChange::NodeChange(pub_keys) => {
-
                             /* let observers: Vec<_> = state
                                 .dhb()
                                 .unwrap()
@@ -729,7 +746,6 @@ impl<C: Contribution, N: NodeId> Future for Handler<C, N> {
                                     assert!(state.dhb().unwrap().netinfo().is_validator());
                                 }
                             } */
-                        
 
                             if let Some(pk) = pub_keys.get(self.hdb.node_id()) {
                                 assert_eq!(*pk, self.hdb.secret_key().public_key());

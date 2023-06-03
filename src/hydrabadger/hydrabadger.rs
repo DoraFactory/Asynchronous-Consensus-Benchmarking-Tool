@@ -322,7 +322,15 @@ impl<C: Contribution, N: NodeId + DeserializeOwned + 'static > Hydrabadger<C, N>
 
     /// Returns a future that handles incoming connections on `socket`.
     fn handle_incoming(self, socket: TcpStream) -> impl Future<Item = (), Error = ()> {
-        info!("Incoming connection from '{}'", socket.peer_addr().unwrap());
+        match socket.peer_addr() {
+            Ok(addr) => {
+                info!("Incoming connection from '{}'", addr);
+            }
+            Err(e) => {
+                error!("Failed to get peer address: {}", e);
+            }
+        }
+
         let wire_msgs: WireMessages<C, N> =
             WireMessages::new(socket, self.inner.secret_key.clone());
 
