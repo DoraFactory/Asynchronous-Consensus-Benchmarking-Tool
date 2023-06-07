@@ -4,14 +4,16 @@
 use super::{Error, Handler, StateDsct, StateMachine};
 use crate::peer::{PeerHandler, Peers};
 use crate::{
-    key_gen, BatchRx, Change, Contribution, EpochRx, EpochTx, InAddr, InternalMessage, InternalTx,
-    NodeId, OutAddr, WireMessage, WireMessageKind, WireMessages, Transaction,
+    key_gen, BatchRx, BatchTx, Change, Contribution, EpochRx, EpochTx, InAddr, InternalMessage, InternalTx,
+    NodeId, OutAddr, WireMessage, WireMessageKind, WireMessages, Transaction, InternalRx,
 };
 use hbbft::crypto::{PublicKey, SecretKey};
 use hbbft::dynamic_honey_badger::Batch;
-use parking_lot::{Mutex, RwLock, RwLockReadGuard, RwLockWriteGuard};
+use parking_lot::{ RwLock, RwLockReadGuard, RwLockWriteGuard };
+use tokio::sync::Mutex;
 use serde::de::DeserializeOwned;
 use std::borrow::BorrowMut;
+use std::ops::DerefMut;
 use std::{
     collections::HashSet,
     net::SocketAddr,
@@ -120,13 +122,15 @@ pub struct Hydrabadger<C: Contribution + Unpin, N: NodeId + Unpin> {
 
 impl<C: Contribution + Unpin, N: NodeId + DeserializeOwned + 'static + Unpin> Hydrabadger<C, N> {
     /// Returns a new Hydrabadger node.
-    pub fn new(addr: SocketAddr, cfg: Config, nid: N) -> Self {
+    pub fn new(
+        addr: SocketAddr, 
+        cfg: Config, 
+        nid: N, 
+        peer_internal_tx: InternalTx<C, N>,
+        batch_rx: BatchRx<C, N>,
+    ) -> Self {
         // 生成peer节点本地私钥
         let secret_key = SecretKey::random();
-
-        // 创建两个通道(一个用来处理节点内部消息，即共识组件和其他组件之间的消息，一个用来发送和接收最终的batch)
-        let (peer_internal_tx, peer_internal_rx) = mpsc::unbounded();
-        let (batch_tx, batch_rx) = mpsc::unbounded();
 
         info!("");
         info!("Local HBBFT Node: ");
@@ -167,25 +171,30 @@ impl<C: Contribution + Unpin, N: NodeId + DeserializeOwned + 'static + Unpin> Hy
         };
 
         // 获得 handler的锁，新创建一个handler，将其传入
-        *hdb.handler.lock() = Some(Handler::new(hdb.clone(), peer_internal_rx, batch_tx));
+        // *hdb.handler.lock() = Some(Handler::new(hdb.clone(), peer_internal_rx, batch_tx));
 
         // 返回实例
         hdb
     }
 
     /// Returns a new Hydrabadger node.
-    pub fn with_defaults(addr: SocketAddr, nid: N) -> Self {
-        Hydrabadger::new(addr, Config::default(), nid)
+    pub fn with_defaults(
+        addr: SocketAddr, 
+        nid: N,
+        peer_internal_tx: InternalTx<C, N>,
+        batch_rx: BatchRx<C, N>,
+    ) -> Self {
+        Hydrabadger::new(addr, Config::default(), nid, peer_internal_tx, batch_rx)
     }
 
     /// Returns the pre-created handler.
-    pub fn handler(&self) -> Option<Handler<C, N>> {
-        self.handler.lock().take()
+    pub async fn handler(&self) -> Option<Handler<C, N>> {
+        self.handler.lock().await.take()
     }
 
     /// Returns the batch output receiver.
-    pub fn batch_rx(&self) -> Option<BatchRx<C, N>> {
-        self.batch_rx.lock().take()
+    pub async fn batch_rx(&self) -> Option<BatchRx<C, N>> {
+        self.batch_rx.lock().await.take()
     }
 
     /// Returns a reference to the inner state.
@@ -230,16 +239,16 @@ impl<C: Contribution + Unpin, N: NodeId + DeserializeOwned + 'static + Unpin> Hy
     /// The returned value should (always?) be equal to `epoch - 1`.
     //
     // TODO: Convert to a simple incrementer?
-    pub(crate) fn set_current_epoch(&self, epoch: u64) -> u64 {
-        let mut ce = self.inner.current_epoch.lock();
+    pub(crate) async fn set_current_epoch(&self, epoch: u64) -> u64 {
+        let mut ce = self.inner.current_epoch.lock().await;
         let prev_epoch = *ce;
         *ce = epoch;
         prev_epoch
     }
 
     /// Returns the epoch of the next batch to be output.
-    pub fn current_epoch(&self) -> u64 {
-        *self.inner.current_epoch.lock()
+    pub async fn current_epoch(&self) -> u64 {
+        *self.inner.current_epoch.lock().await
     }
 
     /// Returns a stream of epoch numbers (e) indicating that a batch has been
@@ -248,10 +257,10 @@ impl<C: Contribution + Unpin, N: NodeId + DeserializeOwned + 'static + Unpin> Hy
     /// The current epoch will be sent upon registration. If a listener is
     /// registered before any batches have been output by this instance of
     /// Hydrabadger, the start epoch will be output.
-    pub fn register_epoch_listener(&self) -> EpochRx {
+    pub async fn register_epoch_listener(&self) -> EpochRx {
         let (tx, rx) = mpsc::unbounded();
         if self.is_validator() {
-            tx.unbounded_send(self.current_epoch())
+            tx.unbounded_send(self.current_epoch().await)
                 .expect("Unknown error: receiver can not have dropped");
         }
         self.inner.epoch_listeners.write().push(tx);
@@ -322,48 +331,48 @@ impl<C: Contribution + Unpin, N: NodeId + DeserializeOwned + 'static + Unpin> Hy
     // Handles incoming connections on `socket`.
     async fn handle_incoming(&self, socket: TcpStream) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         info!("Incoming connection from '{}'", socket.peer_addr().unwrap());
-        let mut wire_msgs: WireMessages<C, N> =
+        let wire_msgs: WireMessages<C, N> =
             WireMessages::new(socket, self.inner.secret_key.clone());
 
-        while let Some(msg) = wire_msgs.next().await {
-            match msg {
-                Ok(msg) => match msg.into_kind() {
-                    WireMessageKind::HelloRequestChangeAdd(peer_nid, peer_in_addr, peer_pk) => {
-                        // 将节点添加到本地节点的列表
-                        // NOTE: 调用PeerHandler::new方法处理，处理节点外部来的消息
-                        // let mut msgs: WireMessages<C, N> = WireMessages::new(socket, self.inner.secret_key.clone());
-                        let peer_h = PeerHandler::new(
-                            Some((peer_nid.clone(), peer_in_addr, peer_pk)),
-                            self.clone(),
-                            wire_msgs,
-                        );
+        let handler_future = async move {
+            let mut w_messages = wire_msgs;
+            while let Some(msg) = w_messages.next().await {
+                match msg {
+                    Ok(msg) => match msg.into_kind() {
+                        WireMessageKind::HelloRequestChangeAdd(peer_nid, peer_in_addr, peer_pk) => {
+                            let peer_h = PeerHandler::new(
+                                Some((peer_nid.clone(), peer_in_addr, peer_pk)),
+                                self.clone(),
+                                w_messages,
+                            );
     
-                        // NOTE: 将HelloRequestChangeAdd消息在节点内部进一步处理hdb().send_internal
-                        peer_h
-                            .hdb()
-                            .send_internal(InternalMessage::new_incoming_connection(
-                                peer_nid.clone(),
-                                *peer_h.out_addr(),
-                                peer_in_addr,
-                                peer_pk,
-                                true,
-                            ));
+                            peer_h
+                                .hdb()
+                                .send_internal(InternalMessage::new_incoming_connection(
+                                    peer_nid.clone(),
+                                    *peer_h.out_addr(),
+                                    peer_in_addr,
+                                    peer_pk,
+                                    true,
+                                ));
+    
+                            return Ok(()); // 返回成功
+                        }
+                        _ => {
+                            error!("Peer connected without sending `WireMessageKind::HelloRequestChangeAdd`.");
+                        }
+                    },
+                    Err(err) => {
+                        error!("Connection error = {:?}", err);
                     }
-                    _ => {
-                        // TODO: Return this as a future-error (handled below):
-                        error!(
-                            "Peer connected without sending \
-                             `WireMessageKind::HelloRequestChangeAdd`."
-                        );
-                    }
-                },
-                Err(err) => {
-                    error!("Connection error = {:?}", err);
-                    // return Err(Box<dyError::ConnectError>)
                 }
             }
-        }
     
+            Err(()) // 返回错误
+        };
+    
+        handler_future.await;
+
         Ok(())
     }
 
@@ -381,15 +390,19 @@ impl<C: Contribution + Unpin, N: NodeId + DeserializeOwned + 'static + Unpin> Hy
         info!("Initiating outgoing connection to: {}", remote_addr);
 
         match TcpStream::connect(&remote_addr).await {
-            Ok(mut socket) => {
+            Ok(socket) => {
+                println!("开始计算本地公钥");
                 let local_pk = local_sk.public_key();
                 // Wrap the socket with the frame delimiter and codec:
                 let mut wire_msgs = WireMessages::new(socket, local_sk);
 
                 // NOTE: 构建一个wireMessage，类型为hello_request_change_add，准备请求加入，然后发送出去
                 let msg = WireMessage::hello_request_change_add(nid, in_addr, local_pk);
-
+                
+                println!("开始发送wire message");
                 wire_msgs.send_msg(msg).await?;
+
+                println!("准备peer handler");
 
                 // NOTE: 获取请求连接的结果，如果这个连接成功，就在当前节点内部发送new_outgoing_connection消息
                 let peer = PeerHandler::new(pub_info, self.clone(), wire_msgs);
@@ -412,6 +425,7 @@ impl<C: Contribution + Unpin, N: NodeId + DeserializeOwned + 'static + Unpin> Hy
                 return Err(Error::ConnectError)
             }
         }
+        println!("结束");
         Ok(())
     }
 
@@ -422,7 +436,7 @@ impl<C: Contribution + Unpin, N: NodeId + DeserializeOwned + 'static + Unpin> Hy
         gen_txns: Option<fn(usize, usize) -> C>,
     ) -> Result<(), Error> {
         if let Some(gen_txns) = gen_txns {
-            let mut epoch_stream = self.register_epoch_listener();
+            let mut epoch_stream = self.register_epoch_listener().await;
             let gen_delay = self.inner.config.txn_gen_interval;
 
             while let Some(epoch_no) = epoch_stream.next().await {
@@ -491,7 +505,6 @@ impl<C: Contribution + Unpin, N: NodeId + DeserializeOwned + 'static + Unpin> Hy
             }
         }
 
-        Ok(())
     }
 
     /// Binds to a host address and returns a future which starts the node.
@@ -504,28 +517,36 @@ impl<C: Contribution + Unpin, N: NodeId + DeserializeOwned + 'static + Unpin> Hy
         info!("Listening on: {}", self.inner.addr);
     
         let remotes = remotes.unwrap_or_default();
-    
-        let hdb = self.clone();
-        let listen = async {
+
+        let hdb_income = Arc::new(Mutex::new(self.clone()));
+        let listen = async move {
             while let Ok((socket, _)) = listener.accept().await {
-                tokio::spawn(hdb.clone().handle_incoming(socket));
+                let hdb_income_clone = Arc::clone(&hdb_income);
+                tokio::spawn(async move {
+                    let mut hdb_income_guard = hdb_income_clone.lock().await;
+                    hdb_income_guard.handle_incoming(socket).await.unwrap();
+                });
             }
         };
-    
-        let hdb = self.clone();
-        let local_sk = hdb.inner.secret_key.clone();
-        let connect = async {
-            for &remote_addr in remotes.iter().filter(|&&ra| ra != hdb.inner.addr.0) {
-                tokio::spawn(hdb.clone().connect_outgoing(
-                    remote_addr,
-                    local_sk.clone(),
-                    None,
-                    true,
-                ));
+
+        let hdb_outgoing = self.clone();
+        let local_sk = hdb_outgoing.inner.secret_key.clone();
+        let connect = async move {
+            for &remote_addr in remotes.iter().filter(|&&ra| ra != hdb_outgoing.inner.addr.0) {
+                let hdb_outgoing_clone = hdb_outgoing.clone();
+                let local_sk_clone = local_sk.clone();
+                tokio::spawn(async move {
+                    hdb_outgoing_clone.connect_outgoing(
+                        remote_addr,
+                        local_sk_clone,
+                        None,
+                        true,
+                    ).await
+                });
             }
         };
-    
-        let hdb_handler = match self.handler() {
+
+        let hdb_handler = match self.handler().await {
             Some(handler) => handler.run(),
             None => {
                 error!("Handler internal error: Handler is None");
@@ -533,13 +554,13 @@ impl<C: Contribution + Unpin, N: NodeId + DeserializeOwned + 'static + Unpin> Hy
             }
         };
     
-        let log_status = self.clone().log_status();
-    
-        let generate_contributions = self.clone().generate_contributions(gen_txns);
+        let log_status = self.log_status();
+        
+        let generate_contributions = self.generate_contributions(gen_txns);
     
         let hdb_clone = self.clone();
         let produce_block = async {
-            let batch_receiver = hdb_clone.batch_rx().unwrap();
+            let mut batch_receiver = hdb_clone.batch_rx().await.unwrap();
             let mut last_block_time = Instant::now();
             while let Some(block) = batch_receiver.next().await {
                 // Rest of the code
@@ -599,39 +620,21 @@ impl<C: Contribution + Unpin, N: NodeId + DeserializeOwned + 'static + Unpin> Hy
                 // write data
                 let data_format = format!("| {} | {} | {} | {} | {} | {} | {} |\n", data[0], data[1], data[2], data[3], data[4], data[5], data[6]);
                 writer.write_all(data_format.as_bytes()).unwrap();
-                Ok(());
+                Ok::<(), C>(());
             }
+            
         };
     
-        tokio::try_join!(listen, connect, hdb_handler, log_status, generate_contributions, produce_block)?;
+        // tokio::try_join!(listen, connect, hdb_handler, log_status, generate_contributions, produce_block)?;
+        tokio::select! {
+            _ = listen => (),
+            _ = connect => (),
+            _ = hdb_handler => (),
+            _ = log_status => (),
+            _ = generate_contributions => (),
+            _ = produce_block => (),
+        };
 
-/*         tokio::spawn(async {
-            match self.handle_incoming(socket).await {
-                Ok(_) => println!("handle_incoming completed successfully."),
-                Err(e) => eprintln!("handle_incoming encountered an error: {:?}", e),
-            }
-        });
-        
-        tokio::spawn(async {
-            match self.connect_outgoing(remote_addr, local_sk, pub_info, is_optimistic).await {
-                Ok(_) => println!("connect_outgoing completed successfully."),
-                Err(e) => eprintln!("connect_outgoing encountered an error: {:?}", e),
-            }
-        });
-        
-        tokio::spawn(async {
-            match self.generate_contributions(gen_txns).await {
-                Ok(_) => println!("generate_contributions completed successfully."),
-                Err(e) => eprintln!("generate_contributions encountered an error: {:?}", e),
-            }
-        });
-        
-        tokio::spawn(async {
-            match self.log_status().await {
-                Ok(_) => println!("log_status completed successfully."),
-                Err(e) => eprintln!("log_status encountered an error: {:?}", e),
-            }
-        }); */
         Ok(())
     }
 
@@ -640,7 +643,10 @@ impl<C: Contribution + Unpin, N: NodeId + DeserializeOwned + 'static + Unpin> Hy
         self,
         remotes: Option<HashSet<SocketAddr>>,
         gen_txns: Option<fn(usize, usize) -> C>,
+        peer_internal_rx: InternalRx<C, N>,
+        batch_tx: BatchTx<C, N>,
     ) {
+        *self.handler.lock().await = Some(Handler::new(self.clone(), peer_internal_rx, batch_tx));
         self.node(remotes, gen_txns).await;
     }
 

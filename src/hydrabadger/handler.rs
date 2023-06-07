@@ -138,7 +138,7 @@ impl<C: Contribution + Unpin, N: NodeId + Unpin> Handler<C, N> {
     }
 
     /// Handles a received `Ack`.
-    fn handle_key_gen_ack(
+    async fn handle_key_gen_ack(
         &self,
         src_nid: &N,
         ack: Ack,
@@ -164,12 +164,12 @@ impl<C: Contribution + Unpin, N: NodeId + Unpin> Handler<C, N> {
             _ => panic!("::handle_key_gen_ack: State must be `GeneratingKeys`."),
         }
         if complete {
-            self.instantiate_hb(None, state, peers)?;
+            self.instantiate_hb(None, state, peers).await?;
         }
         Ok(())
     }
 
-    fn handle_key_gen_message(
+    async fn handle_key_gen_message(
         &self,
         instance_id: key_gen::InstanceId,
         msg: key_gen::Message,
@@ -203,7 +203,7 @@ impl<C: Contribution + Unpin, N: NodeId + Unpin> Handler<C, N> {
                     self.handle_key_gen_part(src_nid, part, state, peers)?;
                 }
                 MessageKind::Ack(ack) => {
-                    self.handle_key_gen_ack(src_nid, ack, state, peers)?;
+                    self.handle_key_gen_ack(src_nid, ack, state, peers).await?;
                 }
             },
         }
@@ -213,7 +213,7 @@ impl<C: Contribution + Unpin, N: NodeId + Unpin> Handler<C, N> {
 
     // This may be called spuriously and only need be handled by
     // 'unestablished' nodes.
-    fn handle_join_plan(
+    async fn handle_join_plan(
         &self,
         jp: JoinPlan<N>,
         state: &mut StateMachine<C, N>,
@@ -227,7 +227,7 @@ impl<C: Contribution + Unpin, N: NodeId + Unpin> Handler<C, N> {
             }
             StateDsct::DeterminingNetworkState => {
                 info!("Received join plan.");
-                self.instantiate_hb(Some(jp), state, peers)?;
+                self.instantiate_hb(Some(jp), state, peers).await?;
             }
             StateDsct::KeyGen => {
                 panic!(
@@ -243,7 +243,7 @@ impl<C: Contribution + Unpin, N: NodeId + Unpin> Handler<C, N> {
     }
 
     // TODO: Create a type for `net_info`.
-    fn instantiate_hb(
+    async fn instantiate_hb(
         &self,
         jp_opt: Option<JoinPlan<N>>,
         state: &mut StateMachine<C, N>,
@@ -278,7 +278,7 @@ impl<C: Contribution + Unpin, N: NodeId + Unpin> Handler<C, N> {
                     }
                 }
                 for l in self.hdb.epoch_listeners().iter() {
-                    l.unbounded_send(self.hdb.current_epoch())
+                    l.unbounded_send(self.hdb.current_epoch().await)
                         .map_err(|_| Error::InstantiateHbListenerDropped)?;
                 }
             }
@@ -380,6 +380,7 @@ impl<C: Contribution + Unpin, N: NodeId + Unpin> Handler<C, N> {
 
         // Connect to all newly discovered peers.
         for peer_info in peer_infos.iter() {
+            let hdb_clone = self.hdb.clone();
             // Only connect with peers which are not already
             // connected (and are not us).
             if peer_info.in_addr != *self.hdb.addr()
@@ -387,12 +388,19 @@ impl<C: Contribution + Unpin, N: NodeId + Unpin> Handler<C, N> {
                 && peers.get(&OutAddr(peer_info.in_addr.0)).is_none()
             {
                 let local_sk = self.hdb.secret_key().clone();
-                tokio::spawn(self.hdb.clone().connect_outgoing(
-                    peer_info.in_addr.0,
-                    local_sk,
-                    Some((peer_info.nid.clone(), peer_info.in_addr, peer_info.pk)),
-                    false,
-                ));
+                let hdb_info = hdb_clone.clone();
+                let nid_clone = peer_info.nid.clone();
+                let in_addr = peer_info.in_addr;
+                let pk = peer_info.pk;
+
+                tokio::spawn(async move {
+                    hdb_info.connect_outgoing(
+                        in_addr.0,
+                        local_sk,
+                        Some((nid_clone, in_addr, pk)),
+                        false,
+                    ).await.unwrap(); // consider proper error handling here
+                });
             }
         }
         Ok(())
@@ -430,7 +438,7 @@ impl<C: Contribution + Unpin, N: NodeId + Unpin> Handler<C, N> {
     }
 
     // NOTE: 处理节点内部的消息，这是一个内部消息的中转方法，所有的内部消息都会在这里处理
-    fn handle_internal_message(
+    async fn handle_internal_message(
         &self,
         i_msg: InternalMessage<C, N>,
         state: &mut StateMachine<C, N>,
@@ -595,14 +603,14 @@ impl<C: Contribution + Unpin, N: NodeId + Unpin> Handler<C, N> {
                         &src_nid.unwrap(),
                         state,
                         &self.hdb.peers(),
-                    )?;
+                    ).await?;
                 }
 
                 // Output by validators when a batch with a `ChangeState`
                 // other than `None` is output. Idempotent.
                 WireMessageKind::JoinPlan(jp) => {
                     let peers = self.hdb.peers();
-                    self.handle_join_plan(jp, state, &peers)?;
+                    self.handle_join_plan(jp, state, &peers).await?;
                 }
 
                 wm => warn!(
@@ -616,9 +624,7 @@ impl<C: Contribution + Unpin, N: NodeId + Unpin> Handler<C, N> {
     }
 }
 
-// NOTE: 这里是重写future的poll方法，这个poll方法的实现就是为了推动这个future的执行的，
-// 这个方法是自动触发的，所以会一直调用这个方法，直到达到某个条件，最终返回ready才算执行完
-// 也就是说，整个节点的状态，消息处理怎么推进，共识结果怎么处理，都是在这个方法里面去定义的
+
 impl<C: Contribution + Unpin, N: NodeId + Unpin> Handler<C, N> {
     pub async fn run(mut self) -> Result<(), Error> {
         // Ensure the loop can't hog the thread for too long:
@@ -629,7 +635,7 @@ impl<C: Contribution + Unpin, N: NodeId + Unpin> Handler<C, N> {
             for _ in 0..MESSAGES_PER_TICK {
                 match self.peer_internal_rx.next().await {
                     Some(i_msg) => {
-                        self.handle_internal_message(i_msg, &mut state)?;
+                        self.handle_internal_message(i_msg, &mut state).await?;
                     }
                     None => {
                         // The sending ends have all dropped.
@@ -663,7 +669,7 @@ impl<C: Contribution + Unpin, N: NodeId + Unpin> Handler<C, N> {
                     // info!("Batch:\n{:?}", batch);
 
                     let batch_epoch = batch.epoch();
-                    let prev_epoch = self.hdb.set_current_epoch(batch_epoch + 1);
+                    let prev_epoch = self.hdb.set_current_epoch(batch_epoch + 1).await;
                     assert_eq!(prev_epoch, batch_epoch);
 
                     if let Some(jp) = batch.join_plan() {

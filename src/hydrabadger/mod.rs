@@ -34,6 +34,8 @@ pub enum Error {
     Serde(bincode::Error),
     #[fail(display = "Connecting error")]
     ConnectError,
+    #[fail(display = "Handler internal error: Handler is None")]
+    HandlerInternalError,
     #[fail(display = "Received a message with invalid signature")]
     InvalidSignature,
     #[fail(display = "Error polling hydrabadger internal receiver")]

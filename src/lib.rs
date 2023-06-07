@@ -106,13 +106,13 @@ type WireTx<C, N> = mpsc::UnboundedSender<WireMessage<C, N>>;
 type WireRx<C, N> = mpsc::UnboundedReceiver<WireMessage<C, N>>;
 
 /// sender of internal message channel.
-type InternalTx<C, N> = mpsc::UnboundedSender<InternalMessage<C, N>>;
+pub type InternalTx<C, N> = mpsc::UnboundedSender<InternalMessage<C, N>>;
 
 /// receiver of internal message channel.
-type InternalRx<C, N> = mpsc::UnboundedReceiver<InternalMessage<C, N>>;
+pub type InternalRx<C, N> = mpsc::UnboundedReceiver<InternalMessage<C, N>>;
 
 /// sender of batch output channel.
-type BatchTx<C, N> = mpsc::UnboundedSender<Batch<C, N>>;
+pub type BatchTx<C, N> = mpsc::UnboundedSender<Batch<C, N>>;
 
 /// receiver of batch output channel.
 pub type BatchRx<C, N> = mpsc::UnboundedReceiver<Batch<C, N>>;
