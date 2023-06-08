@@ -54,8 +54,6 @@ impl<C: Contribution + Unpin, N: NodeId + Unpin> PeerHandler<C, N> {
         // Create a channel for this peer
         let (tx, rx) = mpsc::unbounded();
 
-        pub_info.as_ref().map(|(nid, _, _)| nid.clone());
-
         let nid = match pub_info {
             Some((ref nid, _, pk)) => {
                 wire_msgs.set_peer_public_key(pk);
@@ -64,7 +62,10 @@ impl<C: Contribution + Unpin, N: NodeId + Unpin> PeerHandler<C, N> {
             None => None,
         };
 
+        println!("!!!!!!!!!!!!!!!!!!!tx 通道时关闭的吗 ？？ {:?}", tx.is_closed());
+
         // Add an entry for this `Peer` in the shared state map.
+        // FIXME: 有可能是这里因为锁的原因没有写进去！！
         hdb.peers_mut().add(out_addr, tx, pub_info);
 
         PeerHandler {
@@ -72,7 +73,7 @@ impl<C: Contribution + Unpin, N: NodeId + Unpin> PeerHandler<C, N> {
             wire_msgs,
             hdb,
             rx,
-            out_addr,
+            out_addr,   
         }
     }
 
@@ -85,10 +86,8 @@ impl<C: Contribution + Unpin, N: NodeId + Unpin> PeerHandler<C, N> {
     }
 }
 
-/// A future representing the client connection.
 impl<C: Contribution + Unpin, N: NodeId + Unpin> PeerHandler<C, N> {
-
-    async fn handle(&mut self) -> Result<(), Error> {
+    pub async fn handle(&mut self) -> Result<(), Error> {
         const MESSAGES_PER_TICK: usize = 10;
 
        // Receive all messages from peers.
@@ -109,9 +108,6 @@ impl<C: Contribution + Unpin, N: NodeId + Unpin> PeerHandler<C, N> {
                 None => break,
             }
         }
-
-        // Flush the write buffer to the socket
-        // let _ = self.wire_msgs.flush().await?;
 
         // Read new messages from the socket
         while let Some(message) = self.wire_msgs.next().await {
@@ -194,28 +190,6 @@ impl<C: Contribution + Unpin, N: NodeId + Unpin> PeerHandler<C, N> {
     }
 }
 
-/* impl<C: Contribution, N: NodeId> Drop for PeerHandler<C, N> {
-    fn drop(&mut self) {
-        debug!(
-            "Removing peer ({}: '{:?}') from the list of peers.",
-            self.out_addr,
-            self.nid.clone().unwrap()
-        );
-        // Remove peer transmitter from the lists:
-        self.hdb.peers_mut().remove(&self.out_addr);
-
-        if let Some(nid) = self.nid.clone() {
-            debug!(
-                "Sending peer ({}: '{:?}') disconnect internal message.",
-                self.out_addr,
-                self.nid.clone().unwrap()
-            );
-
-            self.hdb
-                .send_internal(InternalMessage::peer_disconnect(nid, self.out_addr));
-        }
-    }
-} */
 
 #[derive(Clone, Debug)]
 #[allow(dead_code)]
@@ -253,6 +227,7 @@ impl<C: Contribution, N: NodeId> Peer<C, N> {
         tx: WireTx<C, N>,
         pub_info: Option<(N, InAddr, PublicKey)>,
     ) -> Peer<C, N> {
+        println!("tx 在new peer的时候是active的吗？？？？？？:{:?}", tx.is_closed());
         let state = match pub_info {
             None => State::Handshaking,
             Some((nid, in_addr, pk)) => State::EstablishedValidator { nid, in_addr, pk },
@@ -455,10 +430,12 @@ impl<C: Contribution, N: NodeId> Peers<C, N> {
         tx: WireTx<C, N>,
         pub_info: Option<(N, InAddr, PublicKey)>,
     ) {
+        println!("在add操作的时候，tx通道关闭了吗？？ :{:?}", tx.is_closed());
         let peer = Peer::new(out_addr, tx, pub_info);
         if let State::EstablishedValidator { ref nid, .. } = peer.state {
             self.out_addrs.insert(nid.clone(), peer.out_addr);
         }
+        println!("tx通道目前状况如何？？？:{:?}", peer.tx());
         self.peers.insert(peer.out_addr, peer);
     }
 

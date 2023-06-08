@@ -454,6 +454,7 @@ impl<C: Contribution + Unpin, N: NodeId + Unpin> Handler<C, N> {
                 src_pk,
                 request_change_add,
             ) => {
+                println!("接收到NewIncomingConnection消息......");
                 let peers = self.hdb.peers();
 
                 let net_state;
@@ -472,7 +473,9 @@ impl<C: Contribution + Unpin, N: NodeId + Unpin> Handler<C, N> {
                     _ => net_state = state.network_state(&peers),
                 }
 
+                info!("src out addr is : {:?}", src_out_addr);
                 let peer = peers.get(&src_out_addr).unwrap();
+                // FIXME: 这里显示是没有tx sender的
                 if !peer.tx().is_closed(){
                     match peer
                         .tx()
@@ -568,7 +571,7 @@ impl<C: Contribution + Unpin, N: NodeId + Unpin> Handler<C, N> {
                     src_pk,
                     net_state,
                 ) => {
-                    debug!("Received hello from {:?}", src_nid_new);
+                    info!("Received hello from {:?}", src_nid_new);
                     let mut peers = self.hdb.peers_mut();
                     match peers.establish_validator(
                         src_out_addr,
@@ -639,6 +642,7 @@ impl<C: Contribution + Unpin, N: NodeId + Unpin> Handler<C, N> {
 
 impl<C: Contribution + Unpin, N: NodeId + Unpin> Handler<C, N> {
     pub async fn run(mut self) -> Result<(), Error> {
+        println!("handler句柄已经收到了节点内部消息，开始进入共识处理....");
         // Ensure the loop can't hog the thread for too long:
         const MESSAGES_PER_TICK: usize = 50;
         loop {

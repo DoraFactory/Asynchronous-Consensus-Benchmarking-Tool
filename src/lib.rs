@@ -396,7 +396,7 @@ impl<C: Contribution + Unpin, N: NodeId + DeserializeOwned + Unpin> WireMessages
         let signed_message = SignedWireMessage { message, sig };
         let serialized_message = bincode::serialize(&signed_message)
             .map_err(|err| Error::Io(std::io::Error::new(std::io::ErrorKind::Other, err)))?;
-
+        println!("已经在send_msg内部");
         self.framed.send(serialized_message.into()).await?;
         Ok(())
     }

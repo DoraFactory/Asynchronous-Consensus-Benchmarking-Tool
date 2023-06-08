@@ -2,7 +2,7 @@
 //!
 
 use super::{Error, Handler, StateDsct, StateMachine};
-use crate::peer::{PeerHandler, Peers};
+use crate::peer::{PeerHandler, Peers, self};
 use crate::{
     key_gen, BatchRx, BatchTx, Change, Contribution, EpochRx, EpochTx, InAddr, InternalMessage, InternalTx,
     NodeId, OutAddr, WireMessage, WireMessageKind, WireMessages, Transaction, InternalRx,
@@ -275,6 +275,7 @@ impl<C: Contribution + Unpin, N: NodeId + DeserializeOwned + 'static + Unpin> Hy
 
     /// Sends a message on the internal tx.
     pub(crate) fn send_internal(&self, msg: InternalMessage<C, N>) {
+        println!("发送内部节点消息 send internal message");
         if let Err(err) = self.inner.peer_internal_tx.unbounded_send(msg) {
             error!(
                 "Unable to send on internal tx. Internal rx has dropped: {}",
@@ -324,54 +325,6 @@ impl<C: Contribution + Unpin, N: NodeId + DeserializeOwned + 'static + Unpin> Hy
         rx
     }
 
-    // Handles incoming connections on `socket`.
-    async fn handle_incoming(&self, socket: TcpStream) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-        info!("Incoming connection from '{}'", socket.peer_addr().unwrap());
-        let wire_msgs: WireMessages<C, N> =
-            WireMessages::new(socket, self.inner.secret_key.clone());
-
-        let handler_future = async move {
-            let mut w_messages = wire_msgs;
-            while let Some(msg) = w_messages.next().await {
-                match msg {
-                    Ok(msg) => match msg.into_kind() {
-                        WireMessageKind::HelloRequestChangeAdd(peer_nid, peer_in_addr, peer_pk) => {
-                            let peer_h = PeerHandler::new(
-                                Some((peer_nid.clone(), peer_in_addr, peer_pk)),
-                                self.clone(),
-                                w_messages,
-                            );
-    
-                            peer_h
-                                .hdb()
-                                .send_internal(InternalMessage::new_incoming_connection(
-                                    peer_nid.clone(),
-                                    *peer_h.out_addr(),
-                                    peer_in_addr,
-                                    peer_pk,
-                                    true,
-                                ));
-    
-                            return Ok(()); // 返回成功
-                        }
-                        _ => {
-                            error!("Peer connected without sending `WireMessageKind::HelloRequestChangeAdd`.");
-                        }
-                    },
-                    Err(err) => {
-                        error!("Connection error = {:?}", err);
-                    }
-                }
-            }
-    
-            Err(()) // 返回错误
-        };
-    
-        handler_future.await;
-
-        Ok(())
-    }
-
     // Connects to new peer.
     pub(super) async fn connect_outgoing(
         &self,
@@ -401,11 +354,18 @@ impl<C: Contribution + Unpin, N: NodeId + DeserializeOwned + 'static + Unpin> Hy
                 println!("准备peer handler");
 
                 // NOTE: 获取请求连接的结果，如果这个连接成功，就在当前节点内部发送new_outgoing_connection消息
-                let peer = PeerHandler::new(pub_info, self.clone(), wire_msgs);
+                let mut peer = PeerHandler::new(pub_info, self.clone(), wire_msgs);
 
+                println!("peer out addr is {:?}", peer.out_addr());
                 self.send_internal(InternalMessage::new_outgoing_connection(
                     *peer.out_addr(),
                 ));
+
+                // FIXME: 
+                tokio::spawn(async move {
+                    peer.handle().await
+                });
+                return Ok(());
             }
             Err(err) => {
                 println!("connect outgoing error");
@@ -422,10 +382,59 @@ impl<C: Contribution + Unpin, N: NodeId + DeserializeOwned + 'static + Unpin> Hy
                 return Err(Error::ConnectError)
             }
         }
-        println!("结束");
-        Ok(())
     }
 
+    // Handles incoming connections on `socket`.
+    async fn handle_incoming(&self, socket: TcpStream) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        info!("Incoming connection from '{}'", socket.peer_addr().unwrap());
+        let mut wire_msgs: WireMessages<C, N> =
+            WireMessages::new(socket, self.inner.secret_key.clone());
+    
+        let msg = wire_msgs.next().await;
+        match msg {
+            Some(Ok(msg)) => match msg.into_kind() {
+                WireMessageKind::HelloRequestChangeAdd(peer_nid, peer_in_addr, peer_pk) => {
+                    // 1. 解析外部节点的incoming消息
+                    let mut peer_h = PeerHandler::new(
+                        Some((peer_nid.clone(), peer_in_addr, peer_pk)),
+                        self.clone(),
+                        wire_msgs,
+                    );
+    
+                    // 2. 将解析出来的消息传递到节点内部的共识组件
+                    peer_h
+                        .hdb()
+                        .send_internal(InternalMessage::new_incoming_connection(
+                            peer_nid.clone(),
+                            *peer_h.out_addr(),
+                            peer_in_addr,
+                            peer_pk,
+                            true,
+                        ));
+                    
+                    // FIXME: 
+                    tokio::spawn(async move {
+                        peer_h.handle().await
+                    });
+                    Ok(())
+                }
+                _ => {
+                    error!("Peer connected without sending `WireMessageKind::HelloRequestChangeAdd`.");
+                    Err(Box::new(std::io::Error::new(std::io::ErrorKind::Other, "Peer did not send `WireMessageKind::HelloRequestChangeAdd`.")) as Box<dyn std::error::Error + Send + Sync>)
+                }
+            },
+            Some(Err(err)) => {
+                error!("Connection error = {:?}", err);
+                Err(Box::new(err) as Box<dyn std::error::Error + Send + Sync>)
+            },
+            None => {
+                error!("The remote client closed the connection without sending a message.");
+                Err(Box::new(std::io::Error::new(std::io::ErrorKind::Other, "The remote client closed the connection without sending a message.")) as Box<dyn std::error::Error + Send + Sync>)
+            }
+        }
+    }
+    
+    
     // 产生contribution交易
     async fn generate_contributions(
         &self,
@@ -487,8 +496,10 @@ impl<C: Contribution + Unpin, N: NodeId + DeserializeOwned + 'static + Unpin> Hy
             let peer_count = peers.count_total();
             info!("Current Node Role State: {:?}(connect with {} peer nodes)", dsct, peer_count);
         
-            let peer_list = peers
-                .peers()
+            let peer_value = peers.peers();
+            println!("peer value为: {:?}", peer_value);
+            
+            let peer_list = peer_value
                 .map(|p| {
                     p.in_addr()
                         .map(|ia| ia.0.to_string())
@@ -511,27 +522,16 @@ impl<C: Contribution + Unpin, N: NodeId + DeserializeOwned + 'static + Unpin> Hy
         remotes: Option<HashSet<SocketAddr>>,
         gen_txns: Option<fn(usize, usize) -> C>,
     ) -> Result<(), Box<dyn std::error::Error>> {
+
         let listener = TcpListener::bind(&self.inner.addr.0).await?;
         info!("Listening on: {}", self.inner.addr);
     
         let remotes = remotes.unwrap_or_default();
 
-        let hdb_income = Arc::new(Mutex::new(self.clone()));
-        let listen = async move {
-            println!("开始进行listen");
-            while let Ok((socket, _)) = listener.accept().await {
-                let hdb_income_clone = Arc::clone(&hdb_income);
-                tokio::spawn(async move {
-                    let mut hdb_income_guard = hdb_income_clone.lock().await;
-                    hdb_income_guard.handle_incoming(socket).await.unwrap();
-                });
-            }
-            Result::<(), Error>::Ok(())
-        };
-
         let hdb_outgoing = self.clone();
         let local_sk = hdb_outgoing.inner.secret_key.clone();
         
+        // 主动建立外部连接
         let connect = async move {
             for &remote_addr in remotes.iter().filter(|&&ra| ra != hdb_outgoing.inner.addr.0) {
                 let hdb_outgoing_clone = hdb_outgoing.clone();
@@ -545,6 +545,23 @@ impl<C: Contribution + Unpin, N: NodeId + DeserializeOwned + 'static + Unpin> Hy
             Result::<(), Error>::Ok(())
         };
 
+
+        // 监听外部连接，一旦有外部节点的消息，就将其消息进行处理，传递到内部的handler通道
+        let hdb_income = Arc::new(Mutex::new(self.clone()));
+        let listen = async move {
+            println!("开始进行listen");
+            while let Ok((socket, _)) = listener.accept().await {
+                let hdb_income_clone = Arc::clone(&hdb_income);
+                tokio::spawn(async move {
+                    let mut hdb_income_guard = hdb_income_clone.lock().await;
+                    hdb_income_guard.handle_incoming(socket).await.unwrap();
+                });
+            }
+            Result::<(), Error>::Ok(())
+        };
+
+
+        // 从handler通道取消息，将其作为共识的input
         let hdb_handler = match self.handler().await {
             Some(handler) => {
                 println!("开始执行handler");
