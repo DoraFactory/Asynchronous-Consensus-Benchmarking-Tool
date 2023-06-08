@@ -472,18 +472,30 @@ impl<C: Contribution + Unpin, N: NodeId + Unpin> Handler<C, N> {
                     _ => net_state = state.network_state(&peers),
                 }
 
-                // Send response to remote peer:
-                peers
-                    .get(&src_out_addr)
-                    .unwrap()
-                    .tx()
-                    .unbounded_send(WireMessage::welcome_received_change_add(
-                        self.hdb.node_id().clone(),
-                        self.hdb.secret_key().public_key(),
-                        net_state,
-                    ))
-                    .unwrap();
-
+                let peer = peers.get(&src_out_addr).unwrap();
+                if !peer.tx().is_closed(){
+                    match peer
+                        .tx()
+                        .unbounded_send(WireMessage::welcome_received_change_add(
+                            self.hdb.node_id().clone(),
+                            self.hdb.secret_key().public_key(),
+                            net_state,
+                        )) {
+                    Ok(_) => {
+                            info!("welcome receve change add message send successfully")
+                        }
+                    Err(err) => {
+                            // 消息发送失败
+                            // 根据具体情况进行错误处理
+                            println!("Failed to send message: {:?}", err);
+                            // 或者使用 `return Err(err.into())` 将错误传播给上层调用者
+                        }
+                    }
+                } else {
+                    // 通道已关闭，无法发送消息
+                    println!("Channel is closed, unable to send message.");
+                }
+                
                 // Modify state accordingly:
                 self.handle_new_established_peer(
                     src_nid.unwrap(),

@@ -12,6 +12,8 @@ use std;
 
 pub use self::hydrabadger::{Config, Hydrabadger};
 pub use self::state::StateDsct;
+use std::error::Error as StdError;
+use std::fmt;
 
 // Number of times to attempt wire message re-send.
 pub const WIRE_MESSAGE_RETRY_MAX: usize = 10;
@@ -26,35 +28,35 @@ pub enum InputOrMessage<T, N: Ord> {
 
 // TODO: Move this up to `lib.rs` or, preferably, create another error type
 // for general (lib) use.
-#[derive(Debug, Fail)]
+#[derive(Debug)]
 pub enum Error {
-    #[fail(display = "Io error: {}", _0)]
+    // #[fail(display = "Io error: {}", _0)] 
     Io(std::io::Error),
-    #[fail(display = "Serde error: {}", _0)]
+    // #[fail(display = "Serde error: {}", _0)]
     Serde(bincode::Error),
-    #[fail(display = "Connecting error")]
+    // #[fail(display = "Connecting error")]
     ConnectError,
-    #[fail(display = "Handler internal error: Handler is None")]
+    // #[fail(display = "Handler internal error: Handler is None")]
     HandlerInternalError,
-    #[fail(display = "Received a message with invalid signature")]
+    // #[fail(display = "Received a message with invalid signature")]
     InvalidSignature,
-    #[fail(display = "Error polling hydrabadger internal receiver")]
+    // #[fail(display = "Error polling hydrabadger internal receiver")]
     HydrabadgerHandlerPoll,
-    #[fail(display = "DynamicHoneyBadger error")]
+    // #[fail(display = "DynamicHoneyBadger error")]
     Dhb(DhbError),
-    #[fail(display = "DynamicHoneyBadger step error")]
+    // #[fail(display = "DynamicHoneyBadger step error")]
     HbStep(DhbError),
-    #[fail(display = "Error creating SyncKeyGen: {}", _0)]
+    // #[fail(display = "Error creating SyncKeyGen: {}", _0)]
     SyncKeyGenNew(SyncKeyGenError),
-    #[fail(display = "Error generating keys: {}", _0)]
+    // #[fail(display = "Error generating keys: {}", _0)]
     SyncKeyGenGenerate(SyncKeyGenError),
-    #[fail(display = "Unable to push user transactions, this node is not a validator")]
+    // #[fail(display = "Unable to push user transactions, this node is not a validator")]
     ProposeUserContributionNotValidator,
-    #[fail(display = "Unable to vote for a change, this node is not a validator")]
+    // #[fail(display = "Unable to vote for a change, this node is not a validator")]
     VoteForNotValidator,
-    #[fail(display = "Unable to transmit epoch status to listener, listener receiver dropped")]
+    // #[fail(display = "Unable to transmit epoch status to listener, listener receiver dropped")]
     InstantiateHbListenerDropped,
-    #[fail(display = "Message received from unknown peer while attempting to verify")]
+    // #[fail(display = "Message received from unknown peer while attempting to verify")]
     VerificationMessageReceivedUnknownPeer,
 }
 
@@ -73,5 +75,34 @@ impl From<bincode::Error> for Error {
 impl From<DhbError> for Error {
     fn from(err: DhbError) -> Error {
         Error::Dhb(err)
+    }
+}
+
+impl StdError for Error {
+    fn source(&self) -> Option<&(dyn StdError + 'static)> {
+        match self {
+            Error::Io(err) => Some(err),
+            Error::Serde(err) => Some(err),
+            // Error::Dhb(err) => Some(err),
+/*             Error::ConnectError(err) => Some(err),
+            Error::HandlerInternalError(err) =? 
+            Error::InvalidSignature
+            Error::HydrabadgerHandlerPoll
+            Error::HbStep
+            Error::SyncKeyGenNew
+            Error::SyncKeyGenGenerate
+            Error::ProposeUserContributionNotValidator
+            Error::VoteForNotValidator
+            Error::InstantiateHbListenerDropped
+            error::VerificationMessageReceivedUnknownPeer */
+            _ => None,
+        }
+    }
+}
+
+impl fmt::Display for Error {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        // 格式化错误信息的实现
+        write!(f, "Custom Error: {}", self)
     }
 }

@@ -170,10 +170,6 @@ impl<C: Contribution + Unpin, N: NodeId + DeserializeOwned + 'static + Unpin> Hy
             batch_rx: Arc::new(Mutex::new(Some(batch_rx))),
         };
 
-        // 获得 handler的锁，新创建一个handler，将其传入
-        // *hdb.handler.lock() = Some(Handler::new(hdb.clone(), peer_internal_rx, batch_tx));
-
-        // 返回实例
         hdb
     }
 
@@ -391,7 +387,7 @@ impl<C: Contribution + Unpin, N: NodeId + DeserializeOwned + 'static + Unpin> Hy
 
         match TcpStream::connect(&remote_addr).await {
             Ok(socket) => {
-                println!("开始计算本地公钥");
+                info!("开始计算本地公钥");
                 let local_pk = local_sk.public_key();
                 // Wrap the socket with the frame delimiter and codec:
                 let mut wire_msgs = WireMessages::new(socket, local_sk);
@@ -412,6 +408,7 @@ impl<C: Contribution + Unpin, N: NodeId + DeserializeOwned + 'static + Unpin> Hy
                 ));
             }
             Err(err) => {
+                println!("connect outgoing error");
                 if is_optimistic {
                     warn!(
                         "Unable to connect to: {} ({e:?}: {e})",
@@ -478,8 +475,9 @@ impl<C: Contribution + Unpin, N: NodeId + DeserializeOwned + 'static + Unpin> Hy
     /// messages.
     async fn log_status(&self) -> Result<(), Error> {
         let mut interval = tokio::time::interval(Duration::from_millis(self.inner.config.txn_gen_interval));
-
+        println!("开始执行log_status");
         loop {
+            println!("进入log循环");
             let _ = interval.tick().await;
         
             let hdb = self.clone();
@@ -520,6 +518,7 @@ impl<C: Contribution + Unpin, N: NodeId + DeserializeOwned + 'static + Unpin> Hy
 
         let hdb_income = Arc::new(Mutex::new(self.clone()));
         let listen = async move {
+            println!("开始进行listen");
             while let Ok((socket, _)) = listener.accept().await {
                 let hdb_income_clone = Arc::clone(&hdb_income);
                 tokio::spawn(async move {
@@ -527,27 +526,30 @@ impl<C: Contribution + Unpin, N: NodeId + DeserializeOwned + 'static + Unpin> Hy
                     hdb_income_guard.handle_incoming(socket).await.unwrap();
                 });
             }
+            Result::<(), Error>::Ok(())
         };
 
         let hdb_outgoing = self.clone();
         let local_sk = hdb_outgoing.inner.secret_key.clone();
+        
         let connect = async move {
             for &remote_addr in remotes.iter().filter(|&&ra| ra != hdb_outgoing.inner.addr.0) {
                 let hdb_outgoing_clone = hdb_outgoing.clone();
                 let local_sk_clone = local_sk.clone();
                 tokio::spawn(async move {
-                    hdb_outgoing_clone.connect_outgoing(
-                        remote_addr,
-                        local_sk_clone,
-                        None,
-                        true,
-                    ).await
+                    hdb_outgoing_clone
+                        .connect_outgoing(remote_addr, local_sk_clone, None, true)
+                        .await
                 });
             }
+            Result::<(), Error>::Ok(())
         };
 
         let hdb_handler = match self.handler().await {
-            Some(handler) => handler.run(),
+            Some(handler) => {
+                println!("开始执行handler");
+                handler.run()
+            }
             None => {
                 error!("Handler internal error: Handler is None");
                 return Err(Box::new(std::io::Error::new(std::io::ErrorKind::Other, "Handler is None")));
@@ -620,21 +622,11 @@ impl<C: Contribution + Unpin, N: NodeId + DeserializeOwned + 'static + Unpin> Hy
                 // write data
                 let data_format = format!("| {} | {} | {} | {} | {} | {} | {} |\n", data[0], data[1], data[2], data[3], data[4], data[5], data[6]);
                 writer.write_all(data_format.as_bytes()).unwrap();
-                Ok::<(), C>(());
             }
-            
+            Result::<(), Error>::Ok(())
         };
     
-        // tokio::try_join!(listen, connect, hdb_handler, log_status, generate_contributions, produce_block)?;
-        tokio::select! {
-            _ = listen => (),
-            _ = connect => (),
-            _ = hdb_handler => (),
-            _ = log_status => (),
-            _ = generate_contributions => (),
-            _ = produce_block => (),
-        };
-
+        tokio::try_join!(listen, connect, hdb_handler, log_status, generate_contributions, produce_block)?;
         Ok(())
     }
 
