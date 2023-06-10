@@ -11,7 +11,9 @@ use hbbft::{
 };
 use rand::{self, FromEntropy};
 use std::collections::BTreeMap;
-use futures::channel::mpsc;
+// use futures::channel::mpsc;
+use futures::SinkExt;
+use tokio::sync::mpsc;
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq, Hash)]
 pub enum InstanceId {
     BuiltIn,

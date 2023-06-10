@@ -12,26 +12,26 @@ use crate::{
     NetworkState, NodeId, OutAddr, Step, Uid, WireMessage, WireMessageKind,
 };
 use crossbeam::queue::SegQueue;
+use futures::StreamExt;
 use hbbft::{
     crypto::PublicKey,
     dynamic_honey_badger::{Change as DhbChange, ChangeState, JoinPlan},
     sync_key_gen::{Ack, Part},
     Target,
 };
+use rand::thread_rng;
 use rand::Rng;
 use std::{cell::RefCell, collections::HashMap, time::Duration};
-use rand::thread_rng;
-use futures::StreamExt;
 /// Hydrabadger event (internal message) handler.
 pub struct Handler<C: Contribution + Unpin, N: NodeId + Unpin> {
     hdb: Hydrabadger<C, N>,
-    // TODO: 
+    // TODO:
     peer_internal_rx: InternalRx<C, N>,
     /// 外部消息队列(多生产者多消费者队列)
     wire_queue: SegQueue<(N, WireMessage<C, N>, usize)>,
     /// 存储HoneyBadger输出的队列
     step_queue: SegQueue<Step<C, N>>,
-    // TODO: 
+    // TODO:
     batch_tx: BatchTx<C, N>,
     /// DKG的实例
     // TODO: 这个后续可以作为一个单独的线程
@@ -89,7 +89,6 @@ impl<C: Contribution + Unpin, N: NodeId + Unpin> Handler<C, N> {
         }
         Ok(())
     }
-
 
     // NOTE: 核心方法，处理相关的input和消息
     fn handle_iom(
@@ -184,7 +183,7 @@ impl<C: Contribution + Unpin, N: NodeId + Unpin> Handler<C, N> {
                 let mut key_gens = self.key_gens.borrow_mut();
                 match key_gens.get_mut(&id) {
                     Some(ref mut kg) => {
-                        kg.event_tx().unwrap().unbounded_send(msg.clone()).unwrap();
+                        kg.event_tx().unwrap().send(msg.clone()).unwrap();
 
                         match msg.into_kind() {
                             MessageKind::Part(part) => {
@@ -278,7 +277,7 @@ impl<C: Contribution + Unpin, N: NodeId + Unpin> Handler<C, N> {
                     }
                 }
                 for l in self.hdb.epoch_listeners().iter() {
-                    l.unbounded_send(self.hdb.current_epoch().await)
+                    l.send(self.hdb.current_epoch().await)
                         .map_err(|_| Error::InstantiateHbListenerDropped)?;
                 }
             }
@@ -393,13 +392,19 @@ impl<C: Contribution + Unpin, N: NodeId + Unpin> Handler<C, N> {
                 let in_addr = peer_info.in_addr;
                 let pk = peer_info.pk;
 
+                // FIXME:
+                println!("nid_clone is {:?}, in_address is {:?}", nid_clone, in_addr);
+
                 tokio::spawn(async move {
-                    hdb_info.connect_outgoing(
-                        in_addr.0,
-                        local_sk,
-                        Some((nid_clone, in_addr, pk)),
-                        false,
-                    ).await.unwrap(); // consider proper error handling here
+                    hdb_info
+                        .connect_outgoing(
+                            in_addr.0,
+                            local_sk,
+                            Some((nid_clone, in_addr, pk)),
+                            false,
+                        )
+                        .await
+                        .unwrap(); // consider proper error handling here
                 });
             }
         }
@@ -475,30 +480,27 @@ impl<C: Contribution + Unpin, N: NodeId + Unpin> Handler<C, N> {
 
                 info!("src out addr is : {:?}", src_out_addr);
                 let peer = peers.get(&src_out_addr).unwrap();
-                // FIXME: 这里显示是没有tx sender的
-                if !peer.tx().is_closed(){
+                println!("net_state is ********:{:?}", net_state);
+                if !peer.tx().is_closed() {
+                    println!("开始发送peer handler管道数据");
                     match peer
                         .tx()
-                        .unbounded_send(WireMessage::welcome_received_change_add(
+                        .send(WireMessage::welcome_received_change_add(
                             self.hdb.node_id().clone(),
                             self.hdb.secret_key().public_key(),
                             net_state,
                         )) {
-                    Ok(_) => {
+                        Ok(_) => {
                             info!("welcome receve change add message send successfully")
                         }
-                    Err(err) => {
-                            // 消息发送失败
-                            // 根据具体情况进行错误处理
+                        Err(err) => {
                             println!("Failed to send message: {:?}", err);
-                            // 或者使用 `return Err(err.into())` 将错误传播给上层调用者
                         }
                     }
                 } else {
-                    // 通道已关闭，无法发送消息
                     println!("Channel is closed, unable to send message.");
                 }
-                
+
                 // Modify state accordingly:
                 self.handle_new_established_peer(
                     src_nid.unwrap(),
@@ -618,7 +620,8 @@ impl<C: Contribution + Unpin, N: NodeId + Unpin> Handler<C, N> {
                         &src_nid.unwrap(),
                         state,
                         &self.hdb.peers(),
-                    ).await?;
+                    )
+                    .await?;
                 }
 
                 // Output by validators when a batch with a `ChangeState`
@@ -639,9 +642,9 @@ impl<C: Contribution + Unpin, N: NodeId + Unpin> Handler<C, N> {
     }
 }
 
-
 impl<C: Contribution + Unpin, N: NodeId + Unpin> Handler<C, N> {
     pub async fn run(mut self) -> Result<(), Error> {
+        println!("DIDIDIDIDIDIDIDIIII进来自己内部的消息处理咯********************************");
         println!("handler句柄已经收到了节点内部消息，开始进入共识处理....");
         // Ensure the loop can't hog the thread for too long:
         const MESSAGES_PER_TICK: usize = 50;
@@ -649,8 +652,9 @@ impl<C: Contribution + Unpin, N: NodeId + Unpin> Handler<C, N> {
             let mut state = self.hdb.state_mut();
             // 1. NOTE: Process incoming internal messages
             for _ in 0..MESSAGES_PER_TICK {
-                match self.peer_internal_rx.next().await {
+                match self.peer_internal_rx.recv().await {
                     Some(i_msg) => {
+                        println!("internal message is {:?}", i_msg);
                         self.handle_internal_message(i_msg, &mut state).await?;
                     }
                     None => {
@@ -704,7 +708,6 @@ impl<C: Contribution + Unpin, N: NodeId + Unpin> Handler<C, N> {
                         ChangeState::InProgress(_change) => {}
                         ChangeState::Complete(change) => match change {
                             DhbChange::NodeChange(pub_keys) => {
-                    
                                 if let Some(pk) = pub_keys.get(self.hdb.node_id()) {
                                     assert_eq!(*pk, self.hdb.secret_key().public_key());
                                     assert!(state.dhb().unwrap().netinfo().is_validator());
@@ -728,14 +731,14 @@ impl<C: Contribution + Unpin, N: NodeId + Unpin> Handler<C, N> {
 
                     // 通过batch所在的通道，发送当前产生的所有交易
                     if !self.batch_tx.is_closed() {
-                        if let Err(_err) = self.batch_tx.unbounded_send(batch) {
+                        if let Err(_err) = self.batch_tx.send(batch) {
                             error!("Unable to send batch output. Shutting down...");
                             return Ok(());
                         } else {
                             // Notify epoch listeners that a batch has been output.
                             let mut dropped_listeners = Vec::new();
                             for (i, listener) in self.hdb.epoch_listeners().iter().enumerate() {
-                                if let Err(_err) = listener.unbounded_send(batch_epoch + 1) {
+                                if let Err(_err) = listener.send(batch_epoch + 1) {
                                     dropped_listeners.push(i);
                                     error!("Epoch listener {} has dropped.", i);
                                 }
@@ -783,6 +786,5 @@ impl<C: Contribution + Unpin, N: NodeId + Unpin> Handler<C, N> {
             drop(state);
             trace!("hydrabadger::Handler::poll: 'state' unlocked for writing.");
         }
-
     }
 }

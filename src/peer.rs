@@ -9,6 +9,7 @@ use crate::{
 };
 use hbbft::{crypto::PublicKey, dynamic_honey_badger::Input as HbInput};
 use serde::{Deserialize, Serialize};
+use tokio_stream::StreamExt;
 use std::{
     borrow::Borrow,
     collections::{
@@ -16,7 +17,9 @@ use std::{
         HashMap,
     },
 };
-use futures::{channel::mpsc, StreamExt};
+// use futures::{channel::mpsc, StreamExt};
+use futures::SinkExt;
+use tokio::sync::mpsc;
 use std::sync::Arc;
 use parking_lot::{Mutex, RwLock, RwLockReadGuard, RwLockWriteGuard};
 
@@ -52,8 +55,9 @@ impl<C: Contribution + Unpin, N: NodeId + Unpin> PeerHandler<C, N> {
         let out_addr = OutAddr(wire_msgs.socket().peer_addr().unwrap());
 
         // Create a channel for this peer
-        let (tx, rx) = mpsc::unbounded();
+        let (tx, rx) = mpsc::unbounded_channel();
 
+        println!("刚刚创建的tx为:{:?}", tx);
         let nid = match pub_info {
             Some((ref nid, _, pk)) => {
                 wire_msgs.set_peer_public_key(pk);
@@ -62,10 +66,7 @@ impl<C: Contribution + Unpin, N: NodeId + Unpin> PeerHandler<C, N> {
             None => None,
         };
 
-        println!("!!!!!!!!!!!!!!!!!!!tx 通道时关闭的吗 ？？ {:?}", tx.is_closed());
-
         // Add an entry for this `Peer` in the shared state map.
-        // FIXME: 有可能是这里因为锁的原因没有写进去！！
         hdb.peers_mut().add(out_addr, tx, pub_info);
 
         PeerHandler {
@@ -86,32 +87,45 @@ impl<C: Contribution + Unpin, N: NodeId + Unpin> PeerHandler<C, N> {
     }
 }
 
+
+//
 impl<C: Contribution + Unpin, N: NodeId + Unpin> PeerHandler<C, N> {
     pub async fn handle(&mut self) -> Result<(), Error> {
+        println!("开始进行handle处理................................");
         const MESSAGES_PER_TICK: usize = 10;
-
-       // Receive all messages from peers.
         for i in 0..MESSAGES_PER_TICK {
-        // Polling an `UnboundedReceiver` cannot fail, so `unwrap` here is
-        // safe.
-            match self.rx.next().await {
-                Some(v) => {
-                    // Buffer the message. Once all messages are buffered, they will
-                    // be flushed to the socket (right below).
-                    self.wire_msgs.send_msg(v).await?;
+            println!("我正在占用线程................................................................");
+            match self.rx.try_recv() {
+                Ok(message) => {
+                    // 开始在handler的handle方法中发送wire msg...........
+                    if let Err(e) = self.wire_msgs.send_msg(message).await {
+                        error!("Error while sending message: {}", e);
+                    }
 
-                    // Exceeded max messages per tick, schedule notification:
+                    println!("收到了一个handler消息........");
+                    println!("已经收到了多少个消息{:?}***************", i + 1);
                     if i + 1 == MESSAGES_PER_TICK {
-                        // This is now unnecessary as async/await takes care of it
+                        tokio::task::yield_now().await;
                     }
                 }
-                None => break,
+                Err(mpsc::error::TryRecvError::Disconnected) => {
+                    // Channel is closed, breaking loop...
+                    println!("Channel is closed, breaking loop...");
+                    return Ok(());
+                }
+                Err(mpsc::error::TryRecvError::Empty) => {
+                    // No more messages available right now.
+                    println!("No more messages available right now.");
+                    break;
+                }
             }
         }
 
+        println!("RX目前的状态：????? {:?}", self.rx);
+
         // Read new messages from the socket
         while let Some(message) = self.wire_msgs.next().await {
-            trace!("Received message: {:?}", message);
+            info!("Received message: {:?}", message);
             // handle message...
             match message {
                 Ok(msg) => {
@@ -182,10 +196,11 @@ impl<C: Contribution + Unpin, N: NodeId + Unpin> PeerHandler<C, N> {
                 Err(e) => {
                     // handle error...
                     error!("Error when receiving message: {:?}", e);
+                    return Err(e);
                 }
             }
         }
-
+        info!("Peer ({}: '{:?}') disconnected.", self.out_addr, self.nid);
         Ok(())
     }
 }
@@ -227,7 +242,7 @@ impl<C: Contribution, N: NodeId> Peer<C, N> {
         tx: WireTx<C, N>,
         pub_info: Option<(N, InAddr, PublicKey)>,
     ) -> Peer<C, N> {
-        println!("tx 在new peer的时候是active的吗？？？？？？:{:?}", tx.is_closed());
+        //FIXME: 这里是因为传入的pub_info没有值，所以这里并没有设置为EstablishedValidator，也是导致后面出现No in address的原因
         let state = match pub_info {
             None => State::Handshaking,
             Some((nid, in_addr, pk)) => State::EstablishedValidator { nid, in_addr, pk },
@@ -430,12 +445,11 @@ impl<C: Contribution, N: NodeId> Peers<C, N> {
         tx: WireTx<C, N>,
         pub_info: Option<(N, InAddr, PublicKey)>,
     ) {
-        println!("在add操作的时候，tx通道关闭了吗？？ :{:?}", tx.is_closed());
+        println!("pub info的值为:{:?}", pub_info);
         let peer = Peer::new(out_addr, tx, pub_info);
         if let State::EstablishedValidator { ref nid, .. } = peer.state {
             self.out_addrs.insert(nid.clone(), peer.out_addr);
         }
-        println!("tx通道目前状况如何？？？:{:?}", peer.tx());
         self.peers.insert(peer.out_addr, peer);
     }
 
@@ -548,7 +562,7 @@ impl<C: Contribution, N: NodeId> Peers<C, N> {
             .iter()
             .filter(|(&p_addr, _)| p_addr != OutAddr(self.local_addr.0))
         {
-            peer.tx().unbounded_send(msg.clone()).unwrap();
+            peer.tx().send(msg.clone()).unwrap();
         }
     }
 
@@ -574,7 +588,7 @@ impl<C: Contribution, N: NodeId> Peers<C, N> {
     ) -> Option<(N, WireMessage<C, N>, usize)> {
         match self.get_by_nid(&tar_nid) {
             Some(p) => {
-                p.tx().unbounded_send(msg).unwrap();
+                p.tx().send(msg).unwrap();
                 None
             }
             None => {

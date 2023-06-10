@@ -16,7 +16,9 @@ use std::{collections::HashSet, thread, time::Duration};
 use std::env;
 use std::io::Write;
 use std::net::{SocketAddr, ToSocketAddrs};
-use futures::channel::mpsc;
+// use futures::channel::mpsc;
+use futures::SinkExt;
+use tokio::sync::mpsc;
 use hydrabadger::{BatchRx, BatchTx, InternalRx, InternalTx};
 
 /// Returns parsed command line arguments.
@@ -159,8 +161,8 @@ async fn main() {
     }
 
     // 创建两个通道(一个用来处理节点内部消息，即共识组件和其他组件之间的消息，一个用来发送和接收最终的batch)
-    let (peer_internal_tx, peer_internal_rx) = mpsc::unbounded();
-    let (batch_tx, batch_rx) = mpsc::unbounded();
+    let (peer_internal_tx, peer_internal_rx) = mpsc::unbounded_channel();
+    let (batch_tx, batch_rx) = mpsc::unbounded_channel();
 
     // 这里开始将所有的配置注入到一个Hydrabadger实例（节点），每个节点都有一个UID进行标识
     let hb = Hydrabadger::new(bind_address, cfg, Uid::new(), peer_internal_tx, batch_rx);

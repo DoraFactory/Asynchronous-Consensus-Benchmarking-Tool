@@ -87,7 +87,9 @@ use futures::stream::Stream;
 use futures::sink::Sink;
 use std::pin::Pin;
 use std::task::{Context, Poll};
-use futures::{channel::mpsc, SinkExt};
+// use futures::{channel::mpsc, SinkExt};
+use futures::SinkExt;
+use tokio::sync::mpsc;
 
 use uuid::Uuid;
 use std::convert::AsRef;
@@ -435,41 +437,7 @@ impl<C: Contribution + Unpin, N: NodeId + DeserializeOwned + Unpin> Stream for W
         }
     }
 }
-/* 
-impl<C: Contribution, N: NodeId + Serialize> Sink<WireMessage<C, N>> for WireMessages<C, N> {
-    type Error = Error;
 
-    fn poll_ready(self: Pin<&mut Self>, cx: &mut Context) -> Poll<Result<(), Self::Error>> {
-        let this = self.get_mut();
-        Pin::new(&mut this.framed).poll_ready(cx).map_err(Error::from)
-    }
-
-    fn start_send(self: Pin<&mut Self>, item: WireMessage<C, N>) -> Result<(), Self::Error> {
-        // TODO: Reuse buffer:
-        let mut serialized = BytesMut::new();
-
-        let message = bincode::serialize(&item).map_err(Error::Serde)?;
-        let sig = this.local_sk.sign(&message);
-
-        match bincode::serialize(&SignedWireMessage { message, sig }) {
-            Ok(s) => serialized.extend_from_slice(&s),
-            Err(err) => return Err(Error::Io(io::Error::new(io::ErrorKind::Other, err))),
-        }
-        let this = self.get_mut();
-        Pin::new(&mut this.framed).start_send(serialized.freeze()).map_err(Error::from)
-    }
-
-    fn poll_flush(self: Pin<&mut Self>, cx: &mut Context) -> Poll<Result<(), Self::Error>> {
-        let this = self.get_mut();
-        Pin::new(&mut this.framed).poll_flush(cx).map_err(Error::from)
-    }
-
-    fn poll_close(self: Pin<&mut Self>, cx: &mut Context) -> Poll<Result<(), Self::Error>> {
-        let this = self.get_mut();
-        Pin::new(&mut this.framed).poll_close(cx).map_err(Error::from)
-    }
-}
- */
 /// A message between internal threads/tasks.
 #[derive(Clone, Debug)]
 pub enum InternalMessageKind<C: Contribution, N: NodeId> {

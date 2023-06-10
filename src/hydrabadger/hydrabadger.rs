@@ -33,8 +33,10 @@ use tokio::{
     time::{interval, sleep}
 };
 use tokio_stream::*;
-use futures::{channel::mpsc, StreamExt};
-
+// use futures::{channel::mpsc, StreamExt};
+use futures::SinkExt;
+use tokio::sync::mpsc;
+use crossbeam_channel::unbounded;
 // The number of random transactions to generate per interval.
 const DEFAULT_TXN_GEN_COUNT: usize = 5;
 // The interval between randomly generated transactions.
@@ -254,9 +256,9 @@ impl<C: Contribution + Unpin, N: NodeId + DeserializeOwned + 'static + Unpin> Hy
     /// registered before any batches have been output by this instance of
     /// Hydrabadger, the start epoch will be output.
     pub async fn register_epoch_listener(&self) -> EpochRx {
-        let (tx, rx) = mpsc::unbounded();
+        let (tx, rx) = mpsc::unbounded_channel();
         if self.is_validator() {
-            tx.unbounded_send(self.current_epoch().await)
+            tx.send(self.current_epoch().await)
                 .expect("Unknown error: receiver can not have dropped");
         }
         self.inner.epoch_listeners.write().push(tx);
@@ -276,7 +278,7 @@ impl<C: Contribution + Unpin, N: NodeId + DeserializeOwned + 'static + Unpin> Hy
     /// Sends a message on the internal tx.
     pub(crate) fn send_internal(&self, msg: InternalMessage<C, N>) {
         println!("发送内部节点消息 send internal message");
-        if let Err(err) = self.inner.peer_internal_tx.unbounded_send(msg) {
+        if let Err(err) = self.inner.peer_internal_tx.send(msg) {
             error!(
                 "Unable to send on internal tx. Internal rx has dropped: {}",
                 err
@@ -316,7 +318,7 @@ impl<C: Contribution + Unpin, N: NodeId + DeserializeOwned + 'static + Unpin> Hy
     /// Begins a synchronous distributed key generation instance and returns a
     /// stream which may be polled for events and messages.
     pub fn new_key_gen_instance(&self) -> mpsc::UnboundedReceiver<key_gen::Message> {
-        let (tx, rx) = mpsc::unbounded();
+        let (tx, rx) = mpsc::unbounded_channel();
         self.send_internal(InternalMessage::new_key_gen_instance(
             self.inner.nid.clone(),
             OutAddr(*self.inner.addr),
@@ -354,6 +356,7 @@ impl<C: Contribution + Unpin, N: NodeId + DeserializeOwned + 'static + Unpin> Hy
                 println!("准备peer handler");
 
                 // NOTE: 获取请求连接的结果，如果这个连接成功，就在当前节点内部发送new_outgoing_connection消息
+                println!("在传入之前的pub info为:{:?}", pub_info);
                 let mut peer = PeerHandler::new(pub_info, self.clone(), wire_msgs);
 
                 println!("peer out addr is {:?}", peer.out_addr());
@@ -400,6 +403,8 @@ impl<C: Contribution + Unpin, N: NodeId + DeserializeOwned + 'static + Unpin> Hy
                         self.clone(),
                         wire_msgs,
                     );
+
+                    println!("发送完wire message..............");
     
                     // 2. 将解析出来的消息传递到节点内部的共识组件
                     peer_h
@@ -411,7 +416,7 @@ impl<C: Contribution + Unpin, N: NodeId + DeserializeOwned + 'static + Unpin> Hy
                             peer_pk,
                             true,
                         ));
-                    
+
                     // FIXME: 
                     tokio::spawn(async move {
                         peer_h.handle().await
@@ -445,7 +450,7 @@ impl<C: Contribution + Unpin, N: NodeId + DeserializeOwned + 'static + Unpin> Hy
             let mut epoch_stream = self.register_epoch_listener().await;
             let gen_delay = self.inner.config.txn_gen_interval;
 
-            while let Some(epoch_no) = epoch_stream.next().await {
+            while let Some(epoch_no) = epoch_stream.recv().await {
                 tokio::time::sleep(Duration::from_millis(gen_delay)).await;
 
                 let hdb = self.clone();
@@ -581,7 +586,7 @@ impl<C: Contribution + Unpin, N: NodeId + DeserializeOwned + 'static + Unpin> Hy
         let produce_block = async {
             let mut batch_receiver = hdb_clone.batch_rx().await.unwrap();
             let mut last_block_time = Instant::now();
-            while let Some(block) = batch_receiver.next().await {
+            while let Some(block) = batch_receiver.recv().await {
                 // Rest of the code
                 let current_epoch = block.epoch();
                 println!("********************current epoch:{:?}***********************************", current_epoch);
