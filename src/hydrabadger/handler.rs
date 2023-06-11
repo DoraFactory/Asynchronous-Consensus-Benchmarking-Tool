@@ -465,6 +465,7 @@ impl<C: Contribution + Unpin, N: NodeId + Unpin> Handler<C, N> {
                 let net_state;
 
                 match state.state {
+                    // 节点一开始收到另一个节点消息的时候会直接从disconnected状态转换为keygen
                     State::Disconnected {} => {
                         state.set_awaiting_more_peers();
                         net_state = state.network_state(&peers);
@@ -501,10 +502,12 @@ impl<C: Contribution + Unpin, N: NodeId + Unpin> Handler<C, N> {
                     println!("Channel is closed, unable to send message.");
                 }
 
+                println!("发送完消息之后，我的通道是不是关闭的？？？？:{:?}", peer.tx().is_closed());
+
+                println!("handle_new_established_peer 中的state为 :{:?}", state.state.discriminant());
                 // Modify state accordingly:
                 self.handle_new_established_peer(
                     src_nid.unwrap(),
-                    // src_out_addr,
                     src_pk,
                     request_change_add,
                     state,
@@ -589,7 +592,7 @@ impl<C: Contribution + Unpin, N: NodeId + Unpin> Handler<C, N> {
 
                 // New outgoing connection response:
                 WireMessageKind::WelcomeReceivedChangeAdd(src_nid_new, src_pk, net_state) => {
-                    debug!("Received NetworkState: \n{:?}", net_state);
+                    info!("Received NetworkState: \n{:?}", net_state);
                     assert!(src_nid_new == src_nid.unwrap());
                     let mut peers = self.hdb.peers_mut();
 
@@ -664,6 +667,8 @@ impl<C: Contribution + Unpin, N: NodeId + Unpin> Handler<C, N> {
                     }
                 };
             }
+
+            println!("试试看这里执行没................................");
 
             // 2. NOTE: Process outgoing messages
             let peers = self.hdb.peers();

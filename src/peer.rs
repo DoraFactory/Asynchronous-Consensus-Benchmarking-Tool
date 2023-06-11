@@ -22,7 +22,7 @@ use futures::SinkExt;
 use tokio::sync::mpsc;
 use std::sync::Arc;
 use parking_lot::{Mutex, RwLock, RwLockReadGuard, RwLockWriteGuard};
-
+use tokio::time::{sleep, Duration};
 
 /// The state for each connected client.
 pub struct PeerHandler<C: Contribution + Unpin, N: NodeId + Unpin> {
@@ -56,7 +56,7 @@ impl<C: Contribution + Unpin, N: NodeId + Unpin> PeerHandler<C, N> {
 
         // Create a channel for this peer
         let (tx, rx) = mpsc::unbounded_channel();
-
+        pub_info.as_ref().map(|(nid, _, _)| nid.clone());
         println!("刚刚创建的tx为:{:?}", tx);
         let nid = match pub_info {
             Some((ref nid, _, pk)) => {
@@ -92,22 +92,24 @@ impl<C: Contribution + Unpin, N: NodeId + Unpin> PeerHandler<C, N> {
 impl<C: Contribution + Unpin, N: NodeId + Unpin> PeerHandler<C, N> {
     pub async fn handle(&mut self) -> Result<(), Error> {
         println!("开始进行handle处理................................");
-        const MESSAGES_PER_TICK: usize = 10;
+
+        // FIXME: 待定
+        /* const MESSAGES_PER_TICK: usize = 5;
         for i in 0..MESSAGES_PER_TICK {
-            println!("我正在占用线程................................................................");
+            sleep(Duration::from_millis(100)).await;
             match self.rx.try_recv() {
                 Ok(message) => {
                     // 开始在handler的handle方法中发送wire msg...........
-                    if let Err(e) = self.wire_msgs.send_msg(message).await {
+                    if let Err(e) = self.wire_msgs.send_msg(message.clone()).await {
                         error!("Error while sending message: {}", e);
                     }
 
-                    println!("收到了一个handler消息........");
-                    println!("已经收到了多少个消息{:?}***************", i + 1);
+                    println!("收到了一个内部发送的wire message({:?})的消息，并发送出去了........", message.kind());
                     if i + 1 == MESSAGES_PER_TICK {
                         tokio::task::yield_now().await;
                     }
                 }
+
                 Err(mpsc::error::TryRecvError::Disconnected) => {
                     // Channel is closed, breaking loop...
                     println!("Channel is closed, breaking loop...");
@@ -116,12 +118,27 @@ impl<C: Contribution + Unpin, N: NodeId + Unpin> PeerHandler<C, N> {
                 Err(mpsc::error::TryRecvError::Empty) => {
                     // No more messages available right now.
                     println!("No more messages available right now.");
-                    break;
+                    // break;
                 }
+            }
+        } */
+
+        sleep(Duration::from_secs(1)).await;
+        match self.rx.try_recv() {
+            Ok(message) => {
+                // 开始在handler的handle方法中发送wire msg...........
+                if let Err(e) = self.wire_msgs.send_msg(message.clone()).await {
+                    error!("Error while sending message: {}", e);
+                }
+
+                println!("收到了一个内部发送的wire message({:?})的消息，并发送出去了........", message.kind());
+
+            }
+            _ => {
+                println!("none message");
             }
         }
 
-        println!("RX目前的状态：????? {:?}", self.rx);
 
         // Read new messages from the socket
         while let Some(message) = self.wire_msgs.next().await {
@@ -562,6 +579,7 @@ impl<C: Contribution, N: NodeId> Peers<C, N> {
             .iter()
             .filter(|(&p_addr, _)| p_addr != OutAddr(self.local_addr.0))
         {
+            println!("wire to all all all ................");
             peer.tx().send(msg.clone()).unwrap();
         }
     }
