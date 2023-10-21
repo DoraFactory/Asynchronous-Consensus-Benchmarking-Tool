@@ -432,6 +432,7 @@ impl<C: Contribution, N: NodeId + DeserializeOwned + 'static > Hydrabadger<C, N>
         self,
         // 注意这里传入的时候是一个闭包
         gen_txns: Option<fn(usize, usize) -> C>,
+        existing_txns: Option<C>,
     ) -> impl Future<Item = (), Error = ()> {
         if let Some(gen_txns) = gen_txns {
             let epoch_stream = self.register_epoch_listener();
@@ -445,32 +446,42 @@ impl<C: Contribution, N: NodeId + DeserializeOwned + 'static > Hydrabadger<C, N>
                 })
                 .for_each(move |_epoch_no| {
                     let hdb = self.clone();
-
                     if let StateDsct::Validator = hdb.state_dsct_stale() {
-                        info!(
-                            "Generating and sending {} random transactions...",
-                            self.inner.config.txn_gen_count
-                        );
-                        // Send some random transactions to our internal HB instance.
-                        // 这里会实际调用匿名函数，产生随机交易
-                        let txns = gen_txns(
-                            self.inner.config.txn_gen_count,
-                            self.inner.config.txn_gen_bytes,
-                        );
-                        
-                        println!("++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++");
-                        println!("++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++");
-                        println!("我们本地的节点产生的随机transaction数量为{:?}, 每个transaction的大小为{:?}Bytes", self.inner.config.txn_gen_count, self.inner.config.txn_gen_bytes);
-                        println!("++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++");
-                        println!("++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++");
-
-                        // 发送节点内部消息
-                        hdb.send_internal(InternalMessage::hb_contribution(
-                            hdb.inner.nid.clone(),
-                            OutAddr(*hdb.inner.addr),
-                            // contribution是一个泛型，可以是任何类型的数据，比如具体的交易等等
-                            txns,
-                        ));
+                        if let Some(txns) = existing_txns.clone() {
+                            // 如果已有交易，直接发送
+                            info!("Sending transactions with :{:?}", txns);
+                            let hdb = self.clone();
+                            hdb.send_internal(InternalMessage::hb_contribution(
+                                hdb.inner.nid.clone(),
+                                OutAddr(*hdb.inner.addr),
+                                txns,
+                            ));
+                        }else {
+                            info!(
+                                "Have no received message, Generating and sending {} random transactions...",
+                                self.inner.config.txn_gen_count
+                            );
+                            // Send some random transactions to our internal HB instance.
+                            // 这里会实际调用匿名函数，产生随机交易
+                            let txns = gen_txns(
+                                self.inner.config.txn_gen_count,
+                                self.inner.config.txn_gen_bytes,
+                            );
+    
+                            println!("++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++");
+                            println!("++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++");
+                            println!("我们本地的节点产生的随机transaction数量为{:?}, 每个transaction的大小为{:?}Bytes", self.inner.config.txn_gen_count, self.inner.config.txn_gen_bytes);
+                            println!("++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++");
+                            println!("++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++");
+    
+                            // 发送节点内部消息
+                            hdb.send_internal(InternalMessage::hb_contribution(
+                                hdb.inner.nid.clone(),
+                                OutAddr(*hdb.inner.addr),
+                                // contribution是一个泛型，可以是任何类型的数据，比如具体的交易等等
+                                txns,
+                            ));
+                        }
                     }
                     Ok(())
                 })
@@ -527,6 +538,7 @@ impl<C: Contribution, N: NodeId + DeserializeOwned + 'static > Hydrabadger<C, N>
         self,
         remotes: Option<HashSet<SocketAddr>>,
         gen_txns: Option<fn(usize, usize) -> C>,
+        existing_txns: Option<C>,
     ) -> impl Future<Item = (), Error = ()> {
         let socket = TcpListener::bind(&self.inner.addr).unwrap();
         info!("Listening on: {}", self.inner.addr);
@@ -571,7 +583,7 @@ impl<C: Contribution, N: NodeId + DeserializeOwned + 'static > Hydrabadger<C, N>
         let log_status = self.clone().log_status();
 
         // 4. 产生contribution，这个后续可以通过queueing hdb，目前只是dhb
-        let generate_contributions = self.clone().generate_contributions(gen_txns);
+        let generate_contributions = self.clone().generate_contributions(gen_txns, existing_txns);
 
         // 5. 起一个单独的协程，专门来消费batch数据，打包为区块
         let hdb_clone = self.clone();
@@ -653,8 +665,9 @@ impl<C: Contribution, N: NodeId + DeserializeOwned + 'static > Hydrabadger<C, N>
         self,
         remotes: Option<HashSet<SocketAddr>>,
         gen_txns: Option<fn(usize, usize) -> C>,
+        existing_txns: Option<C>,
     ) {
-        tokio::run(self.node(remotes, gen_txns));
+        tokio::run(self.node(remotes, gen_txns, existing_txns));
     }
 
     pub fn addr(&self) -> &InAddr {

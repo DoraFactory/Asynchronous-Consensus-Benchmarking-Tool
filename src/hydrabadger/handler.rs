@@ -625,6 +625,7 @@ impl<C: Contribution, N: NodeId> Future for Handler<C, N> {
 
     /// Polls the internal message receiver until all txs are dropped.
     fn poll(&mut self) -> Poll<(), Error> {
+        println!("handler句柄已经收到了节点内部消息，开始进入共识处理....");
         // Ensure the loop can't hog the thread for too long:
         const MESSAGES_PER_TICK: usize = 50;
 
@@ -649,12 +650,14 @@ impl<C: Contribution, N: NodeId> Future for Handler<C, N> {
                     // The sending ends have all dropped.
                     info!("Shutting down Handler...");
                     return Ok(Async::Ready(()));
-                }
+                } 
                 // 没有收到内部消息
                 Ok(Async::NotReady) => {}
                 Err(()) => return Err(Error::HydrabadgerHandlerPoll),
             };
         }
+
+        println!("看看这里执行没有.......");
 
 
         // 2. NOTE: 处理要发出去的消息

@@ -165,5 +165,5 @@ fn main() {
     };
 
     // 启动节点
-    hb.run_node(Some(remote_addresses), Some(gen_txn));
+    hb.run_node(Some(remote_addresses), Some(gen_txn), None);
 }

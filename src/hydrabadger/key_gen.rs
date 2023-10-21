@@ -242,6 +242,7 @@ impl<N: NodeId> Machine<N> {
     ) -> Result<(), Error> {
         match self.state {
             State::AwaitingPeers { .. } => {
+                println!("当前validators数量为:{:?}", peers.count_validators());
                 if peers.count_validators() >= hdb.config().keygen_peer_count {
                     info!("BEGINNING KEY GENERATION");
 
