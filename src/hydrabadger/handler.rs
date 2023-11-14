@@ -21,7 +21,9 @@ use hbbft::{
 };
 use rand::thread_rng;
 use rand::Rng;
-use std::{cell::RefCell, collections::HashMap, time::Duration};
+use std::{cell::RefCell, collections::HashMap};
+use tokio::time::{sleep, Duration, timeout};
+use tokio::sync::mpsc::error::*;
 /// Hydrabadger event (internal message) handler.
 pub struct Handler<C: Contribution + Unpin, N: NodeId + Unpin> {
     hdb: Hydrabadger<C, N>,
@@ -68,7 +70,7 @@ impl<C: Contribution + Unpin, N: NodeId + Unpin> Handler<C, N> {
             }
             StateDsct::KeyGen => {
                 // TODO: Should network state simply be stored within key_gen?
-                let net_state = state.network_state(&peers);
+                let net_state: NetworkState<N> = state.network_state(&peers);
                 state
                     .key_gen_mut()
                     .unwrap()
@@ -153,6 +155,7 @@ impl<C: Contribution + Unpin, N: NodeId + Unpin> Handler<C, N> {
                 if key_gen.handle_key_gen_ack(src_nid, ack, peers)? {
                     complete = true;
                 }
+                info!("当前的keygen是否已经完成？？？？？？:{:?}", complete);
             }
             State::Validator { .. } | State::Observer { .. } => {
                 error!(
@@ -177,7 +180,6 @@ impl<C: Contribution + Unpin, N: NodeId + Unpin> Handler<C, N> {
         peers: &Peers<C, N>,
     ) -> Result<(), Error> {
         use crate::key_gen::{InstanceId, MessageKind};
-
         match instance_id {
             InstanceId::User(id) => {
                 let mut key_gens = self.key_gens.borrow_mut();
@@ -199,9 +201,11 @@ impl<C: Contribution + Unpin, N: NodeId + Unpin> Handler<C, N> {
             }
             InstanceId::BuiltIn => match msg.into_kind() {
                 MessageKind::Part(part) => {
+                    info!("开始处理kegen part消息.....");
                     self.handle_key_gen_part(src_nid, part, state, peers)?;
                 }
                 MessageKind::Ack(ack) => {
+                    info!("开始处理kegen ack消息.....");
                     self.handle_key_gen_ack(src_nid, ack, state, peers).await?;
                 }
             },
@@ -459,7 +463,7 @@ impl<C: Contribution + Unpin, N: NodeId + Unpin> Handler<C, N> {
                 src_pk,
                 request_change_add,
             ) => {
-                println!("接收到NewIncomingConnection消息......");
+                // println!("接收到NewIncomingConnection消息......");
                 let peers = self.hdb.peers();
 
                 let net_state;
@@ -479,11 +483,11 @@ impl<C: Contribution + Unpin, N: NodeId + Unpin> Handler<C, N> {
                     _ => net_state = state.network_state(&peers),
                 }
 
-                info!("src out addr is : {:?}", src_out_addr);
+                // info!("src out addr is : {:?}", src_out_addr);
                 let peer = peers.get(&src_out_addr).unwrap();
-                println!("net_state is ********:{:?}", net_state);
+                // println!("<<<<<<<<当前整个hbbft网络的state是(不包括本节点):{:?}>>>>>>>>", net_state);
                 if !peer.tx().is_closed() {
-                    println!("开始发送peer handler管道数据");
+                    // println!("本消息用于向外部节点发送Wire message,和外部节点建立connection");
                     match peer
                         .tx()
                         .send(WireMessage::welcome_received_change_add(
@@ -492,21 +496,20 @@ impl<C: Contribution + Unpin, N: NodeId + Unpin> Handler<C, N> {
                             net_state,
                         )) {
                         Ok(_) => {
-                            info!("welcome receve change add message send successfully")
+                        
                         }
                         Err(err) => {
-                            println!("Failed to send message: {:?}", err);
+                            info!("Failed to send message: {:?}", err);
                         }
                     }
                 } else {
-                    println!("Channel is closed, unable to send message.");
+                    info!("Channel is closed, unable to send message.");
                 }
 
-                println!("发送完消息之后，我的通道是不是关闭的？？？？:{:?}", peer.tx().is_closed());
-
-                println!("handle_new_established_peer 中的state为 :{:?}", state.state.discriminant());
+                // println!("当前peer的状态为 :{:?}, 接下来进行handle_new_established_peer操作", state.state.discriminant());
                 // Modify state accordingly:
-                self.handle_new_established_peer(
+                info!("NewIncomingConnection之后进行的handle_new_established_peer");
+                self.handle_new_established_peer(   
                     src_nid.unwrap(),
                     src_pk,
                     request_change_add,
@@ -567,6 +570,7 @@ impl<C: Contribution + Unpin, N: NodeId + Unpin> Handler<C, N> {
             }
 
             InternalMessageKind::Wire(w_msg) => match w_msg.into_kind() {
+                // 这部分匹配的消息都是外部节点发送过来的消息，然后剥离出来，匹配
                 // This is sent on the wire to ensure that we have all of the
                 // relevant details for a peer (generally preceeding other
                 // messages which may arrive before `Welcome...`.
@@ -582,17 +586,23 @@ impl<C: Contribution + Unpin, N: NodeId + Unpin> Handler<C, N> {
                         src_out_addr,
                         (src_nid_new.clone(), src_in_addr, src_pk),
                     ) {
-                        true => debug_assert!(src_nid_new == src_nid.unwrap()),
-                        false => debug_assert!(src_nid.is_none()),
+                        true => {
+                            info!("establish_validator成功！！！！");
+                            debug_assert!(src_nid_new == src_nid.unwrap())
+                        },
+                        false => {
+                            info!("establish_validator失败！！！！");
+                            debug_assert!(src_nid.is_none())
+                        },
                     }
-
+                    info!("当前的net state为:{:?}", net_state);
                     // Modify state accordingly:
                     self.handle_net_state(net_state, state, &peers)?;
                 }
 
                 // New outgoing connection response:
                 WireMessageKind::WelcomeReceivedChangeAdd(src_nid_new, src_pk, net_state) => {
-                    info!("Received NetworkState: \n{:?}", net_state);
+                    // info!("Received NetworkState is: {:?}", net_state);
                     assert!(src_nid_new == src_nid.unwrap());
                     let mut peers = self.hdb.peers_mut();
 
@@ -606,6 +616,7 @@ impl<C: Contribution + Unpin, N: NodeId + Unpin> Handler<C, N> {
                     self.handle_net_state(net_state, state, &peers)?;
 
                     // Modify state accordingly:
+                    info!("WelcomeReceivedChangeAdd之后进行的handle_new_established_peer");
                     self.handle_new_established_peer(
                         src_nid_new,
                         // src_out_addr,
@@ -617,6 +628,7 @@ impl<C: Contribution + Unpin, N: NodeId + Unpin> Handler<C, N> {
                 }
 
                 WireMessageKind::KeyGen(instance_id, msg) => {
+                    info!("收到了keygen这个wire message");
                     self.handle_key_gen_message(
                         instance_id,
                         msg,
@@ -647,33 +659,44 @@ impl<C: Contribution + Unpin, N: NodeId + Unpin> Handler<C, N> {
 
 impl<C: Contribution + Unpin, N: NodeId + Unpin> Handler<C, N> {
     pub async fn run(mut self) -> Result<(), Error> {
-        println!("DIDIDIDIDIDIDIDIIII进来自己内部的消息处理咯********************************");
-        println!("handler句柄已经收到了节点内部消息，开始进入共识处理....");
         // Ensure the loop can't hog the thread for too long:
         const MESSAGES_PER_TICK: usize = 50;
+
         loop {
+            // TODO: 这里还有一个隐藏的问题：就是这里不会循环loop，只会输出一次这个log，比较奇怪，有一种可能就是在下面某个地方阻塞了！！！
+            // TODO: 这里会一直因为MESSAGES_PER_TICK为50，被堵塞在这里，需要用一个timeout，来定期结束这个recv
+            println!("run handler句柄已经收到了节点内部消息，开始进入共识处理....");
             let mut state = self.hdb.state_mut();
             // 1. NOTE: Process incoming internal messages
-            for _ in 0..MESSAGES_PER_TICK {
-                match self.peer_internal_rx.recv().await {
-                    Some(i_msg) => {
-                        println!("internal message is {:?}", i_msg);
-                        self.handle_internal_message(i_msg, &mut state).await?;
-                    }
-                    None => {
-                        // The sending ends have all dropped.
-                        info!("Shutting down Handler...");
-                        return Ok(());
-                    }
-                };
-            }
+            
 
-            println!("试试看这里执行没................................");
+            // NOTE: 备用！！！！！11/12
+            for i in 0..MESSAGES_PER_TICK {
+                match timeout(Duration::from_millis(1000), self.peer_internal_rx.recv()).await {
+                    Ok(Some(i_msg)) => {
+                        // info!("internal message is {:?}", i_msg);
+                        self.handle_internal_message(i_msg, &mut state).await?;
+                        info!("这是当前节点第{:?}次发送内部消息", i);
+                    }
+                    Ok(None) => {
+                        // The sending ends have all dropped.
+                        info!("internal message channel has been closed...");
+                        // break;
+                        return Ok(())
+                    }
+                    Err(_) => {
+                        // Handling time exceeded 2 seconds. yielding.
+                        break;
+                    }
+                }
+            }
+            
+            println!("看这里执行没!!!!!!!....................");
 
             // 2. NOTE: Process outgoing messages
             let peers = self.hdb.peers();
             // Process outgoing wire queue:
-            while let Some((tar_nid, msg, retry_count)) = self.wire_queue.pop() {
+            if let Some((tar_nid, msg, retry_count)) = self.wire_queue.pop() {
                 if retry_count < WIRE_MESSAGE_RETRY_MAX {
                     info!(
                         "Sending queued message from retry queue (retry_count: {})",
@@ -688,7 +711,7 @@ impl<C: Contribution + Unpin, N: NodeId + Unpin> Handler<C, N> {
             trace!("hydrabadger::Handler: Processing step queue....");
 
             // 3. NOTE: 处理hbbft的输出，也就是最终的batch，这是重点
-            while let Some(mut step) = self.step_queue.pop() {
+            if let Some(mut step) = self.step_queue.pop() {
                 for batch in step.output.drain(..) {
                     info!("A HONEY BADGER BATCH WITH CONTRIBUTIONS IS BEING STREAMED...");
                     // info!("Batch:\n{:?}", batch);
@@ -701,6 +724,7 @@ impl<C: Contribution + Unpin, N: NodeId + Unpin> Handler<C, N> {
                         // FIXME: Only sent to unconnected nodes:
                         debug!("Outputting join plan: {:?}", jp);
                         peers.wire_to_all(WireMessage::join_plan(jp));
+                        println!("batch.join_plan的wire all....")
                     }
 
                     println!("debuging@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@");
@@ -768,6 +792,7 @@ impl<C: Contribution + Unpin, N: NodeId + Unpin> Handler<C, N> {
                             );
                         }
                         Target::All => {
+                            println!("我是在这里wire的....");
                             peers.wire_to_all(WireMessage::message(
                                 self.hdb.node_id().clone(),
                                 hb_msg.message,
@@ -787,9 +812,106 @@ impl<C: Contribution + Unpin, N: NodeId + Unpin> Handler<C, N> {
 
             trace!("hydrabadger::Handler: Step queue processing complete.");
 
-            drop(peers);
-            drop(state);
+/*             drop(peers);
+            drop(state); */
             trace!("hydrabadger::Handler::poll: 'state' unlocked for writing.");
+            // Ok(())
+            // return Ok(())
         }
+        // Ok(())
     }
 }
+
+
+
+// NOTE: 注意：这种方案会一直阻塞在这里，并不会执行for循环后面的部
+            /* for i in 0..MESSAGES_PER_TICK {
+                match self.peer_internal_rx.recv().await {
+                    Some(i_msg) => {
+                        // info!("internal message is {:?}", i_msg);
+                        self.handle_internal_message(i_msg, &mut state).await?;
+                        info!("这是当前节点第{:?}次发送内部消息", i);
+                        if i + 1 == MESSAGES_PER_TICK { 
+                            tokio::task::yield_now().await; 
+                        }
+                    }
+                    _ => {
+                        // The sending ends have all dropped.
+                        info!("no internal message...");
+                        // break;
+                        return Ok(());
+                    }
+                };
+            } */
+
+
+            // NOTE: 备选方案
+            /* for i in 0..MESSAGES_PER_TICK {
+                match timeout(Duration::from_secs(2), self.peer_internal_rx.recv()).await {
+                    Ok(Some(i_msg)) => {
+                        // info!("internal message is {:?}", i_msg);
+                        self.handle_internal_message(i_msg, &mut state).await?;
+                        info!("这是当前节点第{:?}次发送内部消息", i);
+                    }
+                    Ok(None) => {
+                        // The sending ends have all dropped.
+                        info!("internal message channel has been closed...");
+                        // break;
+                        return Ok(())
+                    }
+                    Err(_) => {
+                        // Handling time exceeded 2 seconds. yielding.
+                        // break;
+                        
+                    }
+                }
+            } */
+
+
+            /* let mut messages_processed = 0;
+            while let Some(i_msg) = self.peer_internal_rx.recv().await {
+                self.handle_internal_message(i_msg, &mut state).await?;
+
+                messages_processed += 1;
+                if messages_processed >= MESSAGES_PER_TICK {
+                    // 在新的 async/await 模式下，这里不再需要像旧的 Futures 那样手动调用 notify
+                    break;
+                }
+            } */
+
+            /* for _ in 0..MESSAGES_PER_TICK {
+                match self.peer_internal_rx.recv().await {
+                    Some(i_msg) => {
+                        self.handle_internal_message(i_msg, &mut state).await?;
+                    }
+                    None => {
+                        info!("Shutting down Handler...");
+                        return Ok(());
+                    }
+                }
+            } */
+
+
+            // let mut state = self.hdb.state_mut();
+            /* for i in 0..MESSAGES_PER_TICK {
+                sleep(Duration::from_millis(100)).await;
+                match self.peer_internal_rx.try_recv() {
+                    Ok(i_msg) => {
+                        // info!("internal message is {:?}", i_msg);
+                        self.handle_internal_message(i_msg, &mut state).await?;
+                        info!("这是当前节点第{:?}次发送内部消息", i);
+                        if i + 1 == MESSAGES_PER_TICK { 
+                            tokio::task::yield_now().await; 
+                        }
+                    }
+                    Err(TryRecvError::Disconnected) => {
+                        // The sending ends have all dropped.
+                        info!("Shutting down Handler..");
+                        // return Ok(());
+                        break;
+                    }
+                    Err(TryRecvError::Empty) => {
+                        info!("没有收到消息");
+                    }
+                };
+            } */

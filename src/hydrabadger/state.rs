@@ -129,7 +129,7 @@ impl<C: Contribution + Unpin, N: NodeId + Unpin> StateMachine<C, N> {
     pub(super) fn set_awaiting_more_peers(&mut self) {
         self.state = match self.state {
             State::Disconnected {} => {
-                info!("Now is Disconnected, Setting state: `KeyGen`.");
+                info!("State will be changed from `Disconnected` to `KeyGen`.");
                 State::KeyGen {
                     key_gen: key_gen::Machine::awaiting_peers(
                         SegQueue::new(),

@@ -243,6 +243,7 @@ impl<N: NodeId + Unpin> Machine<N> {
     ) -> Result<(), Error> {
         match self.state {
             State::AwaitingPeers { .. } => {
+                info!("当前validators数量为:{:?}", peers.count_validators() + 1);
                 if peers.count_validators() >= hdb.config().keygen_peer_count {
                     info!("BEGINNING KEY GENERATION");
 
@@ -254,6 +255,11 @@ impl<N: NodeId + Unpin> Machine<N> {
                         self.set_generating_keys(&local_nid, hdb.secret_key().clone(), peers)?;
 
                     trace!("KEY GENERATION: Sending initial parts and our own ack.");
+                    // 这里是连接的validator节点超过一定数量的时候，会wire
+                    // 注意这里会发送wire三次消息
+                    // 第一次是hello from validator消息
+                    // 第二次是key gen part消息
+                    // 第三次是key gen ack消息
                     peers.wire_to_validators(WireMessage::hello_from_validator(
                         local_nid,
                         local_in_addr,
@@ -370,6 +376,7 @@ impl<N: NodeId + Unpin> Machine<N> {
                 };
 
                 let node_n = peers.count_validators() + 1;
+                info!("sync key gen的数量为:{:?}, 当前网络的节点数量为:{:?}, ack count为:{:?}", sync_key_gen.as_ref().unwrap().count_complete(), node_n, *ack_count);
 
                 if sync_key_gen.as_ref().unwrap().count_complete() == node_n
                     && *ack_count >= node_n * node_n

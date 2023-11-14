@@ -9,7 +9,8 @@ use crate::{
 };
 use hbbft::{crypto::PublicKey, dynamic_honey_badger::Input as HbInput};
 use serde::{Deserialize, Serialize};
-use tokio_stream::StreamExt;
+use tokio::task;
+use std::clone;
 use std::{
     borrow::Borrow,
     collections::{
@@ -17,12 +18,14 @@ use std::{
         HashMap,
     },
 };
-// use futures::{channel::mpsc, StreamExt};
+use futures::{stream::Stream, StreamExt};
 use futures::SinkExt;
 use tokio::sync::mpsc;
 use std::sync::Arc;
 use parking_lot::{Mutex, RwLock, RwLockReadGuard, RwLockWriteGuard};
-use tokio::time::{sleep, Duration};
+use tokio::time::{sleep, Duration, timeout};
+const MESSAGES_PER_TICK: usize = 10; // 假设每次tick处理10个消息
+
 
 /// The state for each connected client.
 pub struct PeerHandler<C: Contribution + Unpin, N: NodeId + Unpin> {
@@ -57,7 +60,6 @@ impl<C: Contribution + Unpin, N: NodeId + Unpin> PeerHandler<C, N> {
         // Create a channel for this peer
         let (tx, rx) = mpsc::unbounded_channel();
         pub_info.as_ref().map(|(nid, _, _)| nid.clone());
-        println!("刚刚创建的tx为:{:?}", tx);
         let nid = match pub_info {
             Some((ref nid, _, pk)) => {
                 wire_msgs.set_peer_public_key(pk);
@@ -91,134 +93,145 @@ impl<C: Contribution + Unpin, N: NodeId + Unpin> PeerHandler<C, N> {
 //
 impl<C: Contribution + Unpin, N: NodeId + Unpin> PeerHandler<C, N> {
     pub async fn handle(&mut self) -> Result<(), Error> {
-        println!("开始进行handle处理................................");
+        const MESSAGES_PER_TICK: usize = 10;
 
-        // FIXME: 待定
-        /* const MESSAGES_PER_TICK: usize = 5;
-        for i in 0..MESSAGES_PER_TICK {
-            sleep(Duration::from_millis(100)).await;
-            match self.rx.try_recv() {
-                Ok(message) => {
-                    // 开始在handler的handle方法中发送wire msg...........
-                    if let Err(e) = self.wire_msgs.send_msg(message.clone()).await {
-                        error!("Error while sending message: {}", e);
+        loop {
+            println!("..............peer内部开始进行处理...............");
+
+            // NOTE: 备选方案
+            for i in 0..MESSAGES_PER_TICK {
+                // 收到从tx ---> rx管道接收的消息
+                 match timeout(Duration::from_secs(2), self.rx.recv()).await {
+                    Ok(Some(message)) => {
+                        // info!("internal message is {:?}", i_msg);
+                        // 然后将需要发出去的消息通过wire message进行TCP stream进行传送
+                        info!("收到了wire message({:?})的消息", message.kind());
+                        if let Err(e) = self.wire_msgs.start_send(message.clone()).await {
+                            error!("Error while sending message: {}", e);
+                        }
+                        // info!("收到了wire message({:?})的消息，开始通过stream数据流发送........", message.kind());
                     }
-
-                    println!("收到了一个内部发送的wire message({:?})的消息，并发送出去了........", message.kind());
-                    if i + 1 == MESSAGES_PER_TICK {
-                        tokio::task::yield_now().await;
+                    Ok(None) => {
+                        // The sending ends have all dropped.
+                        info!("internal message channel has been closed...");
+                        break;
+                    }
+                    Err(_) => {
+                        // Handling time exceeded 2 seconds. yielding.
+                        break;
                     }
                 }
-
-                Err(mpsc::error::TryRecvError::Disconnected) => {
-                    // Channel is closed, breaking loop...
-                    println!("Channel is closed, breaking loop...");
-                    return Ok(());
-                }
-                Err(mpsc::error::TryRecvError::Empty) => {
-                    // No more messages available right now.
-                    println!("No more messages available right now.");
-                    // break;
-                }
             }
-        } */
-
-        sleep(Duration::from_secs(1)).await;
-        match self.rx.try_recv() {
-            Ok(message) => {
-                // 开始在handler的handle方法中发送wire msg...........
-                if let Err(e) = self.wire_msgs.send_msg(message.clone()).await {
-                    error!("Error while sending message: {}", e);
-                }
-
-                println!("收到了一个内部发送的wire message({:?})的消息，并发送出去了........", message.kind());
-
-            }
-            _ => {
-                println!("none message");
-            }
-        }
-
-
-        // Read new messages from the socket
-        while let Some(message) = self.wire_msgs.next().await {
-            info!("Received message: {:?}", message);
-            // handle message...
-            match message {
-                Ok(msg) => {
-                    match msg.into_kind() {
-                        WireMessageKind::HelloRequestChangeAdd(src_nid, _in_addr, _pub_key) => {
-                            error!(
-                                "Duplicate `WireMessage::HelloRequestChangeAdd` \
-                                 received from '{:?}'",
-                                src_nid
-                            );
-                        }
-                        WireMessageKind::WelcomeReceivedChangeAdd(src_nid, pk, net_state) => {
-                            self.nid = Some(src_nid.clone());
-                            self.wire_msgs.set_peer_public_key(pk);
-                            self.hdb.send_internal(InternalMessage::wire(
-                                Some(src_nid.clone()),
-                                self.out_addr,
-                                WireMessage::welcome_received_change_add(
-                                    src_nid.clone(),
-                                    pk,
-                                    net_state,
-                                ),
-                            ));
-                        }
-                        WireMessageKind::HelloFromValidator(src_nid, in_addr, pk, net_state) => {
-                            self.nid = Some(src_nid.clone());
-                            self.wire_msgs.set_peer_public_key(pk);
-                            self.hdb.send_internal(InternalMessage::wire(
-                                Some(src_nid.clone()),
-                                self.out_addr,
-                                WireMessage::hello_from_validator(
-                                    src_nid.clone(),
-                                    in_addr,
-                                    pk,
-                                    net_state,
-                                ),
-                            ));
-                        }
-                        WireMessageKind::Message(src_nid, msg) => {
-                            if let Some(peer_nid) = self.nid.as_ref() {
-                                debug_assert_eq!(src_nid, *peer_nid);
+            
+            // TODO: 这里也是需要注意的一个点，有可能这里也会导致问题，目前还没研究清楚
+            let _ = self.wire_msgs.flush().await?;
+            println!("节点消息处理模块已结束， 开始接收wire message的stream流数据。。。。");
+            
+            // Read new messages from the socket
+            // TODO: 目前的问题就在于，上面已经通过wire_msgs.send_msg发送出去了消息，但是这里却没有接收到wire msg！！！
+            // NOTE: 注意，这里修改了，原来是while，现在改成了if
+            if let Some(message) = self.wire_msgs.next().await {
+                info!("Received message: {:?}", message);
+                // handle message...
+                match message {
+                    Ok(msg) => {
+                        match msg.into_kind() {
+                            WireMessageKind::HelloRequestChangeAdd(src_nid, _in_addr, _pub_key) => {
+                                error!(
+                                    "Duplicate `WireMessage::HelloRequestChangeAdd` \
+                                     received from '{:?}'",
+                                    src_nid
+                                );
+                                info!("打个招呼,hello Request Change Add message");
                             }
-    
-                            self.hdb.send_internal(InternalMessage::hb_message(
-                                src_nid,
-                                self.out_addr,
-                                msg,
-                            ))
-                        }
-                        WireMessageKind::Transaction(src_nid, txn) => {
-                            if let Some(peer_nid) = self.nid.as_ref() {
-                                debug_assert_eq!(src_nid, *peer_nid);
+                            WireMessageKind::WelcomeReceivedChangeAdd(src_nid, pk, net_state) => {
+                                info!("打个招呼, welcome received Change Add message");
+                                self.nid = Some(src_nid.clone());
+                                self.wire_msgs.set_peer_public_key(pk);
+                                self.hdb.send_internal(InternalMessage::wire(
+                                    Some(src_nid.clone()),
+                                    self.out_addr,
+                                    WireMessage::welcome_received_change_add(
+                                        src_nid.clone(),
+                                        pk,
+                                        net_state,
+                                    ),
+                                ));
+                            }   
+                            WireMessageKind::HelloFromValidator(src_nid, in_addr, pk, net_state) => {
+                                self.nid = Some(src_nid.clone());
+                                self.wire_msgs.set_peer_public_key(pk);
+                                self.hdb.send_internal(InternalMessage::wire(
+                                    Some(src_nid.clone()),
+                                    self.out_addr,
+                                    WireMessage::hello_from_validator(
+                                        src_nid.clone(),
+                                        in_addr,
+                                        pk,
+                                        net_state,
+                                    ),
+                                ));
                             }
-    
-                            self.hdb.send_internal(InternalMessage::hb_contribution(
-                                src_nid,
+                            WireMessageKind::Message(src_nid, msg) => {
+                                if let Some(peer_nid) = self.nid.as_ref() {
+                                    debug_assert_eq!(src_nid, *peer_nid);
+                                }
+        
+                                self.hdb.send_internal(InternalMessage::hb_message(
+                                    src_nid,
+                                    self.out_addr,
+                                    msg,
+                                ))
+                            }
+                            WireMessageKind::Transaction(src_nid, txn) => {
+                                if let Some(peer_nid) = self.nid.as_ref() {
+                                    debug_assert_eq!(src_nid, *peer_nid);
+                                }
+        
+                                self.hdb.send_internal(InternalMessage::hb_contribution(
+                                    src_nid,
+                                    self.out_addr,
+                                    txn,
+                                ))
+                            }
+                            kind => self.hdb.send_internal(InternalMessage::wire(
+                                self.nid.clone(),
                                 self.out_addr,
-                                txn,
-                            ))
+                                kind.into(),
+                            )),
                         }
-                        kind => self.hdb.send_internal(InternalMessage::wire(
-                            self.nid.clone(),
-                            self.out_addr,
-                            kind.into(),
-                        )),
+                    },
+                    Err(e) => {
+                        // handle error...
+                        error!("Error when receiving message: {:?}", e);
+                        return Err(e);
                     }
-                },
-                Err(e) => {
-                    // handle error...
-                    error!("Error when receiving message: {:?}", e);
-                    return Err(e);
                 }
+            } else {
+                info!("Peer ({}: '{:?}') disconnected.", self.out_addr, self.nid);
             }
+
+            // 如果 next().await 返回 None，则表示 Stream 已经结束
+            
+            // Ok(());
+
+            /*  else {
+                info!("Peer ({}: '{:?}') disconnected.", self.out_addr, self.nid);
+                // Remove peer transmitter from the lists:
+                self.hdb.peers_mut().remove(&self.out_addr);
+                if let Some(nid) = self.nid.clone() {
+                    debug!(
+                        "Sending peer ({}: '{:?}') disconnect internal message.",
+                        self.out_addr,
+                        self.nid.clone().unwrap()
+                    );
+        
+                    self.hdb
+                        .send_internal(InternalMessage::peer_disconnect(nid, self.out_addr));
+                }
+            } */
+            // Ok(())
         }
-        info!("Peer ({}: '{:?}') disconnected.", self.out_addr, self.nid);
-        Ok(())
     }
 }
 
@@ -462,7 +475,7 @@ impl<C: Contribution, N: NodeId> Peers<C, N> {
         tx: WireTx<C, N>,
         pub_info: Option<(N, InAddr, PublicKey)>,
     ) {
-        println!("pub info的值为:{:?}", pub_info);
+        println!("即将添加到本节点的peer公钥信息为:{:?}", pub_info);
         let peer = Peer::new(out_addr, tx, pub_info);
         if let State::EstablishedValidator { ref nid, .. } = peer.state {
             self.out_addrs.insert(nid.clone(), peer.out_addr);
@@ -574,23 +587,28 @@ impl<C: Contribution, N: NodeId> Peers<C, N> {
     }
 
     pub(crate) fn wire_to_all(&self, msg: WireMessage<C, N>) {
+        // NOTE: 给每个节点都发送
         for (_p_addr, peer) in self
             .peers
             .iter()
             .filter(|(&p_addr, _)| p_addr != OutAddr(self.local_addr.0))
         {
-            println!("wire to all all all ................");
+
+            // info!("当前要发送消息的validator节点是:{:?}", peer.clone());
+            // NOTE: 可能是这里的问题，消息没有发出去！！！！
+            // println!("当前要发送给validator的消息是{:?}", msg.clone());
             peer.tx().send(msg.clone()).unwrap();
         }
     }
 
     pub(crate) fn wire_to_validators(&self, msg: WireMessage<C, N>) {
-        // for peer in peers.validators()
+        // for peer in peers.validators()   
         //         .filter(|p| p.out_addr() != &OutAddr(self.hdb.addr().0)) {
         //     peer.tx().unbounded_send(msg.clone()).unwrap();
         // }
 
         // FIXME: TEMPORARILY WIRE TO ALL FOR NOW.
+        info!("开始wire to other validator!!!!!");
         self.wire_to_all(msg)
     }
 

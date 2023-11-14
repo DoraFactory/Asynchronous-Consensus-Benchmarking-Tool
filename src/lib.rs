@@ -392,14 +392,31 @@ impl<C: Contribution + Unpin, N: NodeId + DeserializeOwned + Unpin> WireMessages
     }
 
     pub async fn send_msg(&mut self, msg: WireMessage<C, N>) -> Result<(), Error> {
+        /* let message = bincode::serialize(&msg).map_err(Error::Serde)?;
+        let sig = self.local_sk.sign(&message);
+
+        let signed_message = SignedWireMessage { message, sig };
+        let serialized_message = bincode::serialize(&signed_message)
+            .map_err(|err| Error::Io(std::io::Error::new(std::io::ErrorKind::Other, err)))?;
+        self.framed.send(serialized_message.into()).await?; */
+        self.start_send(msg).await?;
+        let _ = self.flush().await?;
+        Ok(())
+    }
+
+    pub async fn start_send(&mut self, msg: WireMessage<C, N>) -> Result<(), Error> {
         let message = bincode::serialize(&msg).map_err(Error::Serde)?;
         let sig = self.local_sk.sign(&message);
 
         let signed_message = SignedWireMessage { message, sig };
         let serialized_message = bincode::serialize(&signed_message)
             .map_err(|err| Error::Io(std::io::Error::new(std::io::ErrorKind::Other, err)))?;
-        println!("已经在send_msg内部");
         self.framed.send(serialized_message.into()).await?;
+        Ok(())
+    }
+
+    pub async fn flush(&mut self) -> Result<(), Error> {
+        self.framed.flush().await?;
         Ok(())
     }
 }
@@ -436,6 +453,34 @@ impl<C: Contribution + Unpin, N: NodeId + DeserializeOwned + Unpin> Stream for W
             Poll::Pending => Poll::Pending,
         }
     }
+    /* fn poll_next(&mut self, cx: &mut Context) -> Poll<Option<Self::Item>> {
+        
+        match self.framed.next() {
+            Poll::Ready(Some(Ok(frame))) => {
+                let s_msg: SignedWireMessage =
+                    bincode::deserialize(&frame.freeze()).map_err(Error::Serde)?;
+                let msg: WireMessage<C, N> =
+                    bincode::deserialize(&s_msg.message).map_err(Error::Serde)?;
+
+                // Verify signature for certain variants.
+                match msg.kind {
+                    WireMessageKind::Message(..) | WireMessageKind::KeyGen(..) => {
+                        let peer_pk = self
+                            .peer_pk
+                            .ok_or(Error::VerificationMessageReceivedUnknownPeer)?;
+                        if !peer_pk.verify(&s_msg.sig, &s_msg.message) {
+                            return Poll::Ready(Some(Err(Error::InvalidSignature)));
+                        }
+                    }
+                    _ => {}
+                }
+                Poll::Ready(Some(Ok(msg)))
+            }
+            Poll::Ready(Some(Err(e))) => Poll::Ready(Some(Err(e.into()))),
+            Poll::Ready(None) => Poll::Ready(None),
+            Poll::Pending => Poll::Pending,
+        }
+    } */
 }
 
 /// A message between internal threads/tasks.

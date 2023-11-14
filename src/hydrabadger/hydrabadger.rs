@@ -275,9 +275,9 @@ impl<C: Contribution + Unpin, N: NodeId + DeserializeOwned + 'static + Unpin> Hy
         &self.inner.config
     }
 
-    /// Sends a message on the internal tx.
+    /// Sends a message on the internal tx.4
     pub(crate) fn send_internal(&self, msg: InternalMessage<C, N>) {
-        println!("发送内部节点消息 send internal message");
+        println!("************开始发送peer internal message*************");
         if let Err(err) = self.inner.peer_internal_tx.send(msg) {
             error!(
                 "Unable to send on internal tx. Internal rx has dropped: {}",
@@ -349,26 +349,26 @@ impl<C: Contribution + Unpin, N: NodeId + DeserializeOwned + 'static + Unpin> Hy
 
                 // NOTE: 构建一个wireMessage，类型为hello_request_change_add，准备请求加入，然后发送出去
                 let msg = WireMessage::hello_request_change_add(nid, in_addr, local_pk);
-                
-                println!("开始发送wire message");
-                wire_msgs.send_msg(msg).await?;
 
-                println!("准备peer handler");
+                // 发送wire msg
+                match wire_msgs.send_msg(msg).await {
+                    Ok(_) => {
+                        // NOTE: 获取请求连接的结果，如果这个连接成功，就在当前节点内部发送new_outgoing_connection消息
+                        let mut peer = PeerHandler::new(pub_info, self.clone(), wire_msgs);
 
-                // NOTE: 获取请求连接的结果，如果这个连接成功，就在当前节点内部发送new_outgoing_connection消息
-                println!("在传入之前的pub info为:{:?}", pub_info);
-                let mut peer = PeerHandler::new(pub_info, self.clone(), wire_msgs);
+                        println!("peer out addr is {:?}", peer.out_addr());
+                        self.send_internal(InternalMessage::new_outgoing_connection(
+                            *peer.out_addr(),
+                        ));
 
-                println!("peer out addr is {:?}", peer.out_addr());
-                self.send_internal(InternalMessage::new_outgoing_connection(
-                    *peer.out_addr(),
-                ));
-
-                // FIXME: 
-                tokio::spawn(async move {
-                    peer.handle().await
-                });
-                return Ok(());
+                        return Ok(peer.handle().await?);
+                    }
+                    Err(err) => {
+                        info!("发送hello_request_change_add失败");
+                        return Err(err);
+                    }
+                }
+                // return Ok(());
             }
             Err(err) => {
                 println!("connect outgoing error");
@@ -397,15 +397,13 @@ impl<C: Contribution + Unpin, N: NodeId + DeserializeOwned + 'static + Unpin> Hy
         match msg {
             Some(Ok(msg)) => match msg.into_kind() {
                 WireMessageKind::HelloRequestChangeAdd(peer_nid, peer_in_addr, peer_pk) => {
+                    info!("接收到HelloRequestChangeAdd消息了");
                     // 1. 解析外部节点的incoming消息
                     let mut peer_h = PeerHandler::new(
                         Some((peer_nid.clone(), peer_in_addr, peer_pk)),
                         self.clone(),
                         wire_msgs,
                     );
-
-                    println!("发送完wire message..............");
-    
                     // 2. 将解析出来的消息传递到节点内部的共识组件
                     peer_h
                         .hdb()
@@ -418,10 +416,12 @@ impl<C: Contribution + Unpin, N: NodeId + DeserializeOwned + 'static + Unpin> Hy
                         ));
 
                     // FIXME: 
-                    tokio::spawn(async move {
-                        peer_h.handle().await
+/*                     tokio::spawn(async move {
+                        peer_h.handle().await;
                     });
-                    Ok(())
+                    Ok(()) */
+
+                    return Ok(peer_h.handle().await?);
                 }
                 _ => {
                     error!("Peer connected without sending `WireMessageKind::HelloRequestChangeAdd`.");
@@ -491,7 +491,6 @@ impl<C: Contribution + Unpin, N: NodeId + DeserializeOwned + 'static + Unpin> Hy
         let mut interval = tokio::time::interval(Duration::from_millis(self.inner.config.txn_gen_interval));
         println!("开始执行log_status");
         loop {
-            println!("进入log循环");
             let _ = interval.tick().await;
         
             let hdb = self.clone();
@@ -502,7 +501,7 @@ impl<C: Contribution + Unpin, N: NodeId + DeserializeOwned + 'static + Unpin> Hy
             info!("Current Node Role State: {:?}(connect with {} peer nodes)", dsct, peer_count);
         
             let peer_value = peers.peers();
-            println!("peer value为: {:?}", peer_value);
+            // println!("当前peer为: {:?}", peer_value);
             
             let peer_list = peer_value
                 .map(|p| {
@@ -536,6 +535,32 @@ impl<C: Contribution + Unpin, N: NodeId + DeserializeOwned + 'static + Unpin> Hy
         let hdb_outgoing = self.clone();
         let local_sk = hdb_outgoing.inner.secret_key.clone();
         
+        // 监听外部连接，一旦有外部节点的消息，就将其消息进行处理，传递到内部的handler通道
+        /* let hdb_income = Arc::new(Mutex::new(self.clone()));
+        let listen = async move {
+            println!("开始监听incoming的请求..........");
+            while let Ok((socket, _)) = listener.accept().await {
+                let hdb_income_clone = Arc::clone(&hdb_income);
+                tokio::spawn(async move {
+                    let mut hdb_income_guard = hdb_income_clone.lock().await;
+                    hdb_income_guard.handle_incoming(socket).await.unwrap();
+                });
+            }
+            Result::<(), Error>::Ok(())
+        }; */
+
+        let hdb_income = self.clone();
+        let listen = async move {
+            println!("开始监听incoming的请求..........");
+            while let Ok((socket, _)) = listener.accept().await {
+                let hdb_income_clone = hdb_income.clone();
+                tokio::spawn(async move {
+                    hdb_income_clone.handle_incoming(socket).await;
+                });
+            }
+            Result::<(), Error>::Ok(())
+        };
+
         // 主动建立外部连接
         let connect = async move {
             for &remote_addr in remotes.iter().filter(|&&ra| ra != hdb_outgoing.inner.addr.0) {
@@ -551,25 +576,9 @@ impl<C: Contribution + Unpin, N: NodeId + DeserializeOwned + 'static + Unpin> Hy
         };
 
 
-        // 监听外部连接，一旦有外部节点的消息，就将其消息进行处理，传递到内部的handler通道
-        let hdb_income = Arc::new(Mutex::new(self.clone()));
-        let listen = async move {
-            println!("开始进行listen");
-            while let Ok((socket, _)) = listener.accept().await {
-                let hdb_income_clone = Arc::clone(&hdb_income);
-                tokio::spawn(async move {
-                    let mut hdb_income_guard = hdb_income_clone.lock().await;
-                    hdb_income_guard.handle_incoming(socket).await.unwrap();
-                });
-            }
-            Result::<(), Error>::Ok(())
-        };
-
-
         // 从handler通道取消息，将其作为共识的input
         let hdb_handler = match self.handler().await {
             Some(handler) => {
-                println!("开始执行handler");
                 handler.run()
             }
             None => {
@@ -577,7 +586,19 @@ impl<C: Contribution + Unpin, N: NodeId + DeserializeOwned + 'static + Unpin> Hy
                 return Err(Box::new(std::io::Error::new(std::io::ErrorKind::Other, "Handler is None")));
             }
         };
-    
+
+/*         tokio::spawn(async move {
+            match self.handler().await {
+                Some(handler) => {
+                    println!("开始执行handler");
+                    handler.run()
+                }
+                None => {
+                    error!("Handler internal error: Handler is None");
+                }
+            };
+        }); */
+
         let log_status = self.log_status();
         
         let generate_contributions = self.generate_contributions(gen_txns);
@@ -603,6 +624,7 @@ impl<C: Contribution + Unpin, N: NodeId + DeserializeOwned + 'static + Unpin> Hy
 
                 // validator数量
                 let validator_numbers = hdb_clone.peers().count_validators() + 1;
+                println!("validator数量为:{:?}", validator_numbers);
 
                 // 将测试结果以nodeid命名的md文件
                 let file_name = hdb_clone.get_nid() + ".md";
